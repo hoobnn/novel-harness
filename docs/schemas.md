@@ -29,11 +29,12 @@ chapters/
   plans/chNNNN.md          章节计划（节拍表 + 契约 + 线程预算）
   drafts/chNNNN.md         草稿（写手/修订者写入）
   reviews/chNNNN.json      编辑评审（含 round）
+  reviews/chNNNN.check.json 连续性检查结论（checker 产出，与 review 同 round）
   final/chNNNN.md          定稿（finalize 后）
   facts/chNNNN.json        章节事实（账本员抽取，commit 时校验）
 summaries/chapters|arcs|volumes/
 state/progress.json        唯一进度事实源；state/decisions.jsonl 决策审计
-index/novel.sqlite         全文索引（可随时 reindex 重建，不入 git）
+index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重建，不入 git）
 ```
 
 ## bible/premise.md
@@ -148,7 +149,13 @@ index/novel.sqlite         全文索引（可随时 reindex 重建，不入 git�
  "revision_instructions":["按优先级排序的可执行修改指令"]}
 ```
 
-verdict 规则：有 critical → rewrite；无 critical 有 error → polish；只有 warning → accept。round 由主会话递增，最多 2 轮修订，之后强制 finalize 并把遗留问题写进 `outline_feedback`。
+verdict 规则：有 critical → rewrite；无 critical 有 error → polish；只有 warning → accept。
+
+该规则由 `novel.py` 的 `effective_verdict()` 从 `issues` 反推校验：若声明的 verdict 比反推结果宽松，以反推结果为准（例如 issues 里有 critical 却写 accept，按 rewrite 处理）。
+
+round 由主会话递增，最多 2 轮修订。第 2 轮后仍为 `polish` 则强制 finalize，把遗留问题写进 `outline_feedback`；仍为 `rewrite` 时 `route` 返回 `blocked`，主会话必须停下询问用户。
+
+`chapters/reviews/chNNNN.check.json`（checker 产出）与 `chNNNN.json` 必须同时存在且 `round` 一致，否则 `route` 判定本轮未完成、重派 `checker+editor`。
 
 ## summaries
 
@@ -165,3 +172,4 @@ verdict 规则：有 critical → rewrite；无 critical 有 error → polish；
 ```
 
 只由 `novel.py` 写入。
+

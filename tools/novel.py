@@ -234,11 +234,41 @@ def mentions(text: str, names: dict[str, str]) -> list[str]:
 
 
 # ---------------------------------------------------------------- sqlite fts
+INDEX_VERSION = 2  # bump 后 db() 自动重建索引表
+
+CJK = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
+
+
+def bigrams(text: str) -> str:
+    """把中文切成相邻两字对供 FTS5 unicode61 索引；非中文按原词保留。
+
+    trigram 分词要求 token >= 3 字符，中文 2 字人名（「老周」）完全检索不到。
+    bigram 是 CJK 全文检索的通行做法（Lucene CJKAnalyzer 同构）。
+    """
+    out: list[str] = []
+    for seg in re.split(r"([\u4e00-\u9fff\u3400-\u4dbf]+)", text):
+        if not seg:
+            continue
+        if CJK.match(seg):
+            out.extend(seg[i:i + 2] for i in range(len(seg) - 1)) if len(seg) > 1 else out.append(seg)
+        else:
+            out.extend(w for w in re.split(r"\W+", seg.lower()) if w)
+    return " ".join(out)
+
+
 def db() -> sqlite3.Connection:
     P["db"].parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(P["db"])
-    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(chapter UNINDEXED, idx UNINDEXED, text, tokenize='trigram')")
-    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS scenes USING fts5(scene_id UNINDEXED, chapter UNINDEXED, day UNINDEXED, location, characters, text, tokenize='trigram')")
+    ver = con.execute("PRAGMA user_version").fetchone()[0]
+    if ver and ver != INDEX_VERSION:  # 旧格式索引：丢弃重建（索引是纯缓存，可 reindex 复原）
+        for t in ("chunks", "scenes"):
+            con.execute(f"DROP TABLE IF EXISTS {t}")
+        ver = 0
+    # raw 保存原文用于 snippet 展示，text 保存 bigram 形式用于匹配
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS chunks USING fts5(chapter UNINDEXED, idx UNINDEXED, raw UNINDEXED, text, tokenize='unicode61')")
+    con.execute("CREATE VIRTUAL TABLE IF NOT EXISTS scenes USING fts5(scene_id UNINDEXED, chapter UNINDEXED, day UNINDEXED, location UNINDEXED, characters UNINDEXED, raw UNINDEXED, text, tokenize='unicode61')")
+    if not ver:
+        con.execute(f"PRAGMA user_version={INDEX_VERSION}")
     return con
 
 
@@ -260,18 +290,42 @@ def index_chapter(con: sqlite3.Connection, n: int, text: str, facts: dict) -> No
     con.execute("DELETE FROM chunks WHERE chapter=?", (n,))
     con.execute("DELETE FROM scenes WHERE chapter=?", (n,))
     for i, c in enumerate(chunk_text(text)):
-        con.execute("INSERT INTO chunks(chapter, idx, text) VALUES (?,?,?)", (n, i, c))
+        con.execute("INSERT INTO chunks(chapter, idx, raw, text) VALUES (?,?,?,?)", (n, i, c, bigrams(c)))
     for s in facts.get("scenes", []):
-        con.execute("INSERT INTO scenes(scene_id, chapter, day, location, characters, text) VALUES (?,?,?,?,?,?)",
+        # 场景卡把地点/人物一并并入可匹配文本，检索「老周」「铁匠铺」都能命中
+        blob = " ".join([s.get("summary", ""), s.get("location", ""), " ".join(s.get("characters", []))])
+        con.execute("INSERT INTO scenes(scene_id, chapter, day, location, characters, raw, text) VALUES (?,?,?,?,?,?,?)",
                     (s.get("id", ""), n, s.get("day"), s.get("location", ""),
-                     " ".join(s.get("characters", [])), s.get("summary", "")))
+                     " ".join(s.get("characters", [])), s.get("summary", ""), bigrams(blob)))
     con.commit()
 
 
+def excerpt(raw: str, q: str, width: int = 120) -> str:
+    """在原文里定位查询词并就近截取，命中处用【】标出。"""
+    for tok in sorted(re.split(r"\s+", q.strip()), key=len, reverse=True):
+        if tok and tok in raw:
+            i = raw.index(tok)
+            lo = max(0, i - width // 2)
+            hi = min(len(raw), i + len(tok) + width // 2)
+            body = raw[lo:i] + "【" + tok + "】" + raw[i + len(tok):hi]
+            return ("…" if lo else "") + body + ("…" if hi < len(raw) else "")
+    return raw[:width] + ("…" if len(raw) > width else "")
+
+
 def fts_query(q: str) -> str:
-    # trigram 分词要求每个 token ≥3 字符；短词退化为 LIKE 由调用方处理。
-    toks = [t for t in re.split(r"\s+", q.strip()) if t]
-    return " OR ".join('"' + t.replace('"', '""') + '"' for t in toks if len(t) >= 3)
+    """把查询转成 bigram 短语。单字查询无法用 bigram 表达，交由调用方走 LIKE 兜底。"""
+    phrases = []
+    for tok in re.split(r"\s+", q.strip()):
+        if not tok:
+            continue
+        if len(CJK.sub("", tok)) == 0 and len(tok) < 2:
+            return ""  # 单个汉字无法用 bigram 表达，交给 LIKE 兜底
+        bg = bigrams(tok)
+        if not bg:
+            continue
+        # 同一个词的相邻字对必须连续出现，用 NEAR 会误配，这里用短语匹配
+        phrases.append('"' + bg.replace('"', '""') + '"')
+    return " OR ".join(phrases)
 
 
 def search(q: str, before: int | None, limit: int) -> dict:
@@ -281,20 +335,21 @@ def search(q: str, before: int | None, limit: int) -> dict:
     cond = " AND chapter < ?" if before else ""
     args_tail = (before,) if before else ()
     if match:
-        rows = con.execute(f"SELECT scene_id, chapter, day, location, characters, text, bm25(scenes) FROM scenes WHERE scenes MATCH ?{cond} ORDER BY bm25(scenes) LIMIT ?",
+        rows = con.execute(f"SELECT scene_id, chapter, day, location, characters, raw, bm25(scenes) FROM scenes WHERE scenes MATCH ?{cond} ORDER BY bm25(scenes) LIMIT ?",
                            (match, *args_tail, limit)).fetchall()
         res["scenes"] = [dict(zip(["scene_id", "chapter", "day", "location", "characters", "summary", "score"], r)) for r in rows]
-        rows = con.execute(f"SELECT chapter, idx, snippet(chunks, 2, '【', '】', '…', 40), bm25(chunks) FROM chunks WHERE chunks MATCH ?{cond} ORDER BY bm25(chunks) LIMIT ?",
+        rows = con.execute(f"SELECT chapter, idx, raw, bm25(chunks) FROM chunks WHERE chunks MATCH ?{cond} ORDER BY bm25(chunks) LIMIT ?",
                            (match, *args_tail, limit)).fetchall()
-        res["chunks"] = [dict(zip(["chapter", "idx", "snippet", "score"], r)) for r in rows]
-    else:  # 短词兜底
+        # raw 是原文，snippet 由调用方按查询词就近截取（bigram 索引无法直接用 fts5 snippet）
+        res["chunks"] = [{"chapter": c, "idx": i, "snippet": excerpt(raw, q), "score": sc} for c, i, raw, sc in rows]
+    else:  # 单字或纯符号查询兜底
         like = f"%{q.strip()}%"
-        rows = con.execute(f"SELECT scene_id, chapter, day, location, characters, text FROM scenes WHERE (text LIKE ? OR characters LIKE ? OR location LIKE ?){cond} ORDER BY chapter DESC LIMIT ?",
+        rows = con.execute(f"SELECT scene_id, chapter, day, location, characters, raw FROM scenes WHERE (raw LIKE ? OR characters LIKE ? OR location LIKE ?){cond} ORDER BY chapter DESC LIMIT ?",
                            (like, like, like, *args_tail, limit)).fetchall()
         res["scenes"] = [dict(zip(["scene_id", "chapter", "day", "location", "characters", "summary"], r)) for r in rows]
-        rows = con.execute(f"SELECT chapter, idx, substr(text, max(1, instr(text, ?) - 40), 120) FROM chunks WHERE text LIKE ?{cond} ORDER BY chapter DESC LIMIT ?",
-                           (q.strip(), like, *args_tail, limit)).fetchall()
-        res["chunks"] = [dict(zip(["chapter", "idx", "snippet"], r)) for r in rows]
+        rows = con.execute(f"SELECT chapter, idx, raw FROM chunks WHERE raw LIKE ?{cond} ORDER BY chapter DESC LIMIT ?",
+                           (like, *args_tail, limit)).fetchall()
+        res["chunks"] = [{"chapter": c, "idx": i, "snippet": excerpt(raw, q)} for c, i, raw in rows]
     return res
 
 
@@ -333,6 +388,19 @@ def foundation_missing() -> list[str]:
     if not P["voice"].exists():
         missing.append("bible/style/voice.md")
     return missing
+
+
+def effective_verdict(review: dict) -> str:
+    """按 docs/schemas.md 的规则从 issues 反推 verdict，取与声明值中更严格的一个。
+
+    editor 可能给出与 issues 不符的 verdict（有 critical 却写 accept），
+    这是能用代码判定的事，不依赖角色自觉。
+    """
+    sev = {i.get("severity") for i in review.get("issues", [])}
+    derived = "rewrite" if "critical" in sev else "polish" if "error" in sev else "accept"
+    rank = {"accept": 0, "polish": 1, "rewrite": 2}
+    declared = review.get("verdict", "accept")
+    return derived if rank.get(derived, 0) > rank.get(declared, 0) else declared
 
 
 def route(p: dict) -> dict:
@@ -377,10 +445,25 @@ def route(p: dict) -> dict:
     if not ch_path("drafts", n, "md").exists():
         return {"action": "writer", "chapter": n, "reason": "无草稿"}
     review = read_json(ch_path("reviews", n, "json"), None)
-    if review is None:
-        return {"action": "checker+editor", "chapter": n, "reason": "草稿待检查与评审"}
-    if review.get("verdict") in ("rewrite", "polish") and review.get("round", 0) < 2:
-        return {"action": "writer:revise", "chapter": n, "reason": f"评审结论 {review['verdict']}", "round": review.get("round", 0) + 1}
+    check = read_json(P["reviews"] / f"{ch_name(n)}.check.json", None)
+    if review is None or check is None:
+        missing_side = []
+        if check is None:
+            missing_side.append("checker")
+        if review is None:
+            missing_side.append("editor")
+        return {"action": "checker+editor", "chapter": n, "reason": "草稿待检查与评审",
+                "missing": missing_side}
+    if review.get("round", 0) != check.get("round", review.get("round", 0)):
+        return {"action": "checker+editor", "chapter": n, "reason": "check 与 review 轮次不一致，需重跑本轮",
+                "missing": ["checker", "editor"]}
+    verdict = effective_verdict(review)
+    rnd = review.get("round", 0)
+    if verdict == "rewrite" and rnd >= 2:
+        return {"action": "blocked", "chapter": n,
+                "reason": "修订 2 轮后仍为 rewrite，按 CLAUDE.md 需停下询问用户"}
+    if verdict in ("rewrite", "polish") and rnd < 2:
+        return {"action": "writer:revise", "chapter": n, "reason": f"评审结论 {verdict}", "round": rnd + 1}
     if not ch_path("final", n, "md").exists():
         return {"action": "finalize", "chapter": n, "reason": "评审通过，草稿待定稿"}
     if not ch_path("facts", n, "json").exists():
@@ -495,7 +578,23 @@ def validate_facts(n: int, facts: dict) -> list[str]:
     return errs
 
 
+
+
 # ---------------------------------------------------------------- lint / stylestat
+DIALOG = re.compile(r"[「『\u201c][^「『\u201c\u300d\u300f\u201d]*[\u300d\u300f\u201d]")
+
+
+def split_dialog(body: str) -> tuple[str, str]:
+    """拆出（叙述层, 对白层）。
+
+    疲劳词与禁用套句只应约束叙述腔：人物口癖属于声音卡的一部分，
+    在对白里出现「然而」「某种程度上」是刻画，不是 AI 腔。
+    """
+    dialog = " ".join(DIALOG.findall(body))
+    narration = DIALOG.sub(" ", body)
+    return narration, dialog
+
+
 def lint_text(text: str, n: int | None = None) -> dict:
     rules = style_rules()
     body = re.sub(r"^#.*$", "", text, flags=re.M)
@@ -506,21 +605,28 @@ def lint_text(text: str, n: int | None = None) -> dict:
         warnings.append(f"字数 {count} 明显低于目标下限 {lo}")
     elif count > hi * 1.25:
         warnings.append(f"字数 {count} 明显高于目标上限 {hi}")
+    narration, dialog = split_dialog(body)
     for ph in rules.get("forbidden_phrases", []):
-        c = body.count(ph)
+        c = narration.count(ph)
         if c:
-            issues.append(f"禁用套句「{ph}」出现 {c} 次")
+            issues.append(f"叙述中禁用套句「{ph}」出现 {c} 次")
+        d = dialog.count(ph)
+        if d:
+            warnings.append(f"对白中出现禁用套句「{ph}」{d} 次；若非刻意的人物口癖请改掉")
     for w, limit in rules.get("fatigue_words", {}).items():
-        c = body.count(w)
+        c = narration.count(w)
         if c > limit:
-            issues.append(f"疲劳词「{w}」出现 {c} 次（阈值 {limit}）")
+            issues.append(f"叙述中疲劳词「{w}」出现 {c} 次（阈值 {limit}）")
+        d = dialog.count(w)
+        if d > limit * 2:  # 对白阈值放宽一倍，只有明显滥用才报
+            warnings.append(f"对白中疲劳词「{w}」出现 {d} 次，偏多")
     if re.search(r"^\s*#{2,}\s", body, flags=re.M) or re.search(r"^\s*[一二三四五六七八九十]+[、.．]\s", body, flags=re.M):
         issues.append("正文中出现小标题/编号分段，应只保留章标题")
     if "——" in body and body.count("——") > 6:
         warnings.append(f"破折号出现 {body.count('——')} 次，偏多")
     patterns = {}
     for name, rx in PATTERNS:
-        c = len(rx.findall(body))
+        c = len(rx.findall(narration))
         if c:
             patterns[name] = c
     for name, c in patterns.items():
@@ -539,7 +645,10 @@ def lint_text(text: str, n: int | None = None) -> dict:
     lines = [l.strip() for l in body.strip().split("\n") if l.strip()]
     ending = lines[-1] if lines else ""
     opening = " ".join(lines[:2])
+    dlg_chars = len(re.sub(r"\s+", "", dialog))
+    dialog_ratio = round(dlg_chars / count, 2) if count else 0.0
     return {"chapter": n, "word_count": count, "issues": issues, "warnings": warnings, "patterns": patterns,
+            "dialog_ratio": dialog_ratio,
             "ending_len": len(ending), "opening_time_word": bool(OPENING_TIME.search(opening[:30]))}
 
 
@@ -600,7 +709,17 @@ def stylestat(upto: int | None = None) -> dict:
             hooks[f["hook_type"]] += 1
         if f.get("dominant_thread"):
             strands[f["dominant_thread"]] += 1
+    dratios = []
+    for cn, t in chapters:
+        b = re.sub(r"^#.*$", "", t, flags=re.M)
+        _, dg = split_dialog(b)
+        w = wc(t)
+        if w:
+            dratios.append((cn, round(len(re.sub(r"\s+", "", dg)) / w, 2)))
+    dvals = sorted(v for _, v in dratios)
     return {"chapters": n, "avg_words": round(sum(wc(t) for _, t in chapters) / n),
+            "dialog_ratio": {"median": dvals[len(dvals) // 2] if dvals else 0,
+                             "lowest": sorted(dratios, key=lambda x: x[1])[:5]},
             "patterns": pats, "top_phrases": top_phrases, "repeated_sentences": repeated,
             "ending": {"short_ratio": round(short / n, 2), "median_len": endings[len(endings) // 2] if endings else 0},
             "opening_time_rate": round(opening_time / n, 2),
@@ -1085,6 +1204,7 @@ def main(argv: list[str]) -> None:
     s.add_argument("--force", action="store_true")
     s = sub.add_parser("finalize", help="把草稿复制为定稿（评审通过后）")
     s.add_argument("chapter", type=int)
+    s.add_argument("--force", action="store_true", help="允许覆盖已提交章节的定稿")
     s = sub.add_parser("review-done", help="登记弧/卷评审完成：v1a2 或 v1")
     s.add_argument("key")
     s = sub.add_parser("queue-revision", help="把已提交章节加入返工队列")
@@ -1163,6 +1283,10 @@ def main(argv: list[str]) -> None:
         d = read_text(ch_path("drafts", a.chapter, "md"))
         if not d:
             fail("草稿不存在")
+        facts = read_json(ch_path("facts", a.chapter, "json"), None)
+        if facts and facts.get("committed_sha") and not a.force:
+            fail(f"第 {a.chapter} 章已提交；覆盖定稿会让账本与正文脱节。"
+                 f"确需返工请走 queue-revision，或显式 --force")
         ch_path("final", a.chapter, "md").write_text(d, encoding="utf-8")
         print(f"finalized ch{a.chapter:04d} ({wc(d)} 字)")
     elif a.cmd == "review-done":
