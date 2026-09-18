@@ -70,11 +70,21 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
 [{"title":"离乡","theme":"立足","final":false,"arcs":[
   {"title":"青石镇","goal":"…","estimated_chapters":10,"chapters":[
     {"title":"借炉","core_event":"…","hook":"…","scenes":["…","…"],
-     "threads":["T01"],"characters":["林越"],"day_hint":"D1-D2"}]},
+     "threads":["T01"],"characters":["林越"],"day_hint":"D1-D2",
+     "must_advance":["T01"],"min_key_events":2}]},
   {"title":"骨架弧","goal":"…","estimated_chapters":12}]}]
 ```
 
 卷序号、弧序号、全书章号由数组顺序推导，不要手写 index。骨架弧没有 `chapters`。收官卷带 `"final": true`。
+
+**进度配额（可选，防注水）**：
+
+- `must_advance`: 本章必须**实质推进**的线程 id（facts 里必须出现对应的 `advance` / `resolve` / `plant`，`touch` 不算）
+- `min_key_events`: 本章 `key_events` 的最少条数
+
+两者由 architect 展开弧时按需要写，不写就不检查。`commit` 前由 `validate-facts` 硬校验，
+并在上下文包里以「本章进度配额」段提前告知 planner 与 writer。
+剧情确实偏离大纲时，写进 `outline_feedback` 并让 architect 改大纲，不要靠放宽配额绕过。
 
 ## outline/compass.json
 
@@ -127,13 +137,17 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
             {"action":"plant","title":"…","type":"foreshadow","promise":"…","characters":["…"],"payoff_window":[20,30],"note":"…"}],
  "knowledge":[{"who":"苏眠","fact":"炉底刻着一行字","status":"knows","source":"林越告知"}],
  "state_changes":[{"entity":"林越","field":"injury","old":"","new":"左臂骨折","reason":"…"}],
- "relationships":[{"a":"林越","b":"苏眠","relation":"结伴同行，互不信任","delta":"trust+1"}],
+ "relationships":[{"a":"林越","b":"苏眠","relation":"结伴同行，互不信任","delta":"trust+1","trust":1}],
  "cast_intros":[{"name":"老周","brief_role":"青石镇铁匠"}],
  "timeline_extra":[{"day":10,"event":"（本章提到的过去事件）","characters":["…"],"location":"…"}],
  "hook_type":"reveal","dominant_thread":"T01",
  "outline_feedback":{"deviation":"…","suggestion":"…"}}
 ```
 
+- `relationships[].trust`（可选）：关系亲疏刻度，**-5..5 的整数**（-5 死敌 / 0 中立 / 5 生死之交）。
+  写了就会进账本 `ledger/relationships.json` 与人物状态投影。单章跳变超过 **3** 会被 `validate-facts` 拦截，
+  跳变 ≥2 时 `check` 会给 checker 一条 warning，要求确认正文有足够事件支撑。
+  关系突变请拆成多章推进，不要一章从死敌变挚友。
 - `knowledge.status`: knows / suspects / believes_false / forgot
 - `hook_type`: crisis / reveal / choice / interrupted_action / identity / clue / deadline / emotional_aftermath / relationship_shift / quiet
 - `scenes[].characters` 只列有名角色；无名群众不列。新配角必须同时出现在 `cast_intros`。

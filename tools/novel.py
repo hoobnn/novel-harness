@@ -92,6 +92,8 @@ THREAD_TYPES = ["main", "subplot", "mystery", "relationship", "foreshadow", "cha
 THREAD_STATUS = ["planned", "active", "dormant", "resolved", "abandoned"]
 THREAD_ACTIONS = ["plant", "advance", "touch", "resolve", "abandon"]
 KNOWLEDGE_STATUS = ["knows", "suspects", "believes_false", "forgot"]
+TRUST_RANGE = (-5, 5)          # 关系亲疏刻度：-5 死敌 / 0 中立 / 5 生死之交
+TRUST_JUMP_LIMIT = 3           # 单章跳变上限，超过要求正文给出足够事件支撑
 
 
 # ---------------------------------------------------------------- io helpers
@@ -583,9 +585,21 @@ def validate_facts(n: int, facts: dict) -> list[str]:
     for i, c in enumerate(facts.get("state_changes", [])):
         if not (c.get("entity") and c.get("field") and c.get("new")):
             errs.append(f"state_changes[{i}] 需要 entity/field/new")
+    rel_ledger = read_json(P["relationships"], {})
     for i, r in enumerate(facts.get("relationships", [])):
         if not (r.get("a") and r.get("b") and r.get("relation")) or r.get("a") == r.get("b"):
             errs.append(f"relationships[{i}] 需要 a/b/relation 且 a≠b")
+            continue
+        tr = r.get("trust")
+        if tr is None:
+            continue
+        if not isinstance(tr, int) or not (TRUST_RANGE[0] <= tr <= TRUST_RANGE[1]):
+            errs.append(f"relationships[{i}].trust 必须是 {TRUST_RANGE[0]}..{TRUST_RANGE[1]} 的整数（-5 死敌 / 0 中立 / 5 生死之交）")
+            continue
+        prev = rel_ledger.get("|".join(sorted([r["a"], r["b"]])), {}).get("trust")
+        if isinstance(prev, int) and abs(tr - prev) > TRUST_JUMP_LIMIT:
+            errs.append(f"relationships[{i}]「{r['a']}－{r['b']}」信任度从 {prev} 跳到 {tr}（跨度 {abs(tr - prev)}，上限 {TRUST_JUMP_LIMIT}）；"
+                        f"关系突变需要足够事件支撑，若正文确有重大事件请拆成多章推进或在 outline_feedback 说明")
     for who, loc in (facts.get("locations_end") or {}).items():
         if who not in known and who not in new_cast:
             errs.append(f"locations_end 中「{who}」未知实体")
@@ -593,9 +607,32 @@ def validate_facts(n: int, facts: dict) -> list[str]:
         errs.append(f"hook_type 非法: {facts['hook_type']}，可选 {HOOK_TYPES}")
     if facts.get("dominant_thread") and facts["dominant_thread"] not in tids | {u.get("id") for u in facts.get("threads", []) if u.get("action") == "plant"}:
         errs.append("dominant_thread 不是已知线程")
+    errs += check_quota(n, facts)
     return errs
 
 
+def check_quota(n: int, facts: dict) -> list[str]:
+    """进度配额：大纲给本章设的硬边界，防止只写氛围不推进剧情。
+
+    `must_advance` 列出本章必须实质推进（advance/resolve，非 touch）的线程；
+    `min_key_events` 是本章至少要发生的关键事件数。两者都是可选字段，
+    architect 展开弧时按需要写，不写就不检查。
+    """
+    entry = locate(n)
+    if not entry:
+        return []
+    errs: list[str] = []
+    real = {u.get("id") for u in facts.get("threads", [])
+            if u.get("action") in ("advance", "resolve", "plant") and u.get("id")}
+    for tid in entry.get("must_advance") or []:
+        if tid not in real:
+            errs.append(f"进度配额：大纲要求本章实质推进线程 {tid}（advance/resolve），"
+                        f"但 facts.threads 里没有它的 advance/resolve；"
+                        f"若剧情确实改了走向，请在 outline_feedback 说明并让 architect 改大纲")
+    lo = entry.get("min_key_events")
+    if isinstance(lo, int) and len(facts.get("key_events") or []) < lo:
+        errs.append(f"进度配额：大纲要求本章至少 {lo} 个关键事件，实际 {len(facts.get('key_events') or [])} 个")
+    return errs
 
 
 # ---------------------------------------------------------------- lint / stylestat
@@ -769,6 +806,15 @@ def check_chapter(n: int, facts: dict | None) -> dict:
             if status and any(k in status for k in ("死亡", "已死", "身亡")):
                 findings.append({"kind": "status", "severity": "critical", "msg": f"「{who}」状态为「{status}」，本章正文仍提及，请确认是回忆/尸体/误判"})
         # 知识越界：本章 knowledge 里 knows 的事实与账本 believes_false 冲突等交给 LLM；这里只提示可用账本
+    # 关系突变：trust 跳变虽在 validate-facts 拦截，这里给 checker 一个更早的提示
+    if facts:
+        rel_l = read_json(P["relationships"], {})
+        for r in facts.get("relationships", []):
+            tr = r.get("trust")
+            prev = rel_l.get("|".join(sorted([r.get("a", ""), r.get("b", "")])), {}).get("trust")
+            if isinstance(tr, int) and isinstance(prev, int) and abs(tr - prev) >= 2:
+                findings.append({"kind": "relationship", "severity": "warning",
+                                 "msg": f"「{r['a']}－{r['b']}」信任度 {prev} → {tr}，请确认正文有足够事件支撑这个变化"})
     # 线程：本章计划涉及的线程与 facts 中推进的线程
     plan = read_text(ch_path("plans", n, "md"))
     planned = set(re.findall(r"\bT\d{2,3}\b", plan))
@@ -837,6 +883,13 @@ def build_context(n: int, role: str) -> str:
                 "场景：", md_list(entry.get("scenes", [])),
                 f"涉及线程：{entry.get('threads', [])}",
                 f"预期出场：{entry.get('characters', [])}"]
+        quota = []
+        if entry.get("must_advance"):
+            quota.append(f"必须实质推进（advance/resolve，touch 不算）：{entry['must_advance']}")
+        if entry.get("min_key_events"):
+            quota.append(f"关键事件至少 {entry['min_key_events']} 个")
+        if quota:
+            out += ["", "## 本章进度配额（硬边界，commit 时校验）"] + [f"- {q}" for q in quota]
         nxt = locate(n + 1)
         if nxt:
             out += [f"下一章预告：《{nxt.get('title', '')}》— {nxt.get('core_event', '')}"]
@@ -1051,10 +1104,13 @@ def commit(n: int, force: bool = False) -> None:
     rel = read_json(P["relationships"], {})
     for r in facts.get("relationships", []):
         key = "|".join(sorted([r["a"], r["b"]]))
-        ent = rel.setdefault(key, {"a": r["a"], "b": r["b"], "relation": "", "history": []})
+        ent = rel.setdefault(key, {"a": r["a"], "b": r["b"], "relation": "", "trust": None, "history": []})
         ent["relation"] = r["relation"]
         ent["chapter"] = n
-        ent["history"].append({"chapter": n, "relation": r["relation"], "delta": r.get("delta", "")})
+        if r.get("trust") is not None:
+            ent["trust"] = r["trust"]
+        ent["history"].append({"chapter": n, "relation": r["relation"],
+                               "delta": r.get("delta", ""), "trust": r.get("trust")})
     write_json(P["relationships"], rel)
     # character projections
     for name in present:
@@ -1078,7 +1134,8 @@ def commit(n: int, force: bool = False) -> None:
     for r in facts.get("relationships", []):
         for a, b in ((r["a"], r["b"]), (r["b"], r["a"])):
             st = load_char_state(a)
-            st.setdefault("relations", {})[b] = r["relation"]
+            st.setdefault("relations", {})[b] = (
+                f"{r['relation']}（信任 {r['trust']:+d}）" if r.get("trust") is not None else r["relation"])
             write_json(char_state_path(a), st)
     # threads
     threads = load_threads()

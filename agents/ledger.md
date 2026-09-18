@@ -21,7 +21,7 @@ model: sonnet
 - **线程**：只记正文里真实发生的动作。计划承诺但正文没做到的，不记。新钩子只有在后续显然要回应时才 `plant`，并给 `payoff_window`；预登记线程首次落地用 `plant` + 原 id。`resolve` 时 `note` 写清如何兑现。
 - **知识**：谁在本章新知道、开始怀疑、被误导了什么。这是防穿帮的核心账本，宁多勿少，但每条都要能在正文找到依据。同一事实被多人知道就多条。
 - **状态变化**：伤势、装备、能力、身份、财产、公开身份等；`field` 用稳定的英文键（injury / possession / rank / identity / status / power / wealth 等），同一类变化沿用既有键名（看 `ledger/characters/<slug>.json`）。死亡写 `status: 死亡`。
-- **关系**：只记本章有变化的对子，`relation` 写变化后的状态，`delta` 写方向。
+- **关系**：只记本章有变化的对子，`relation` 写变化后的状态，`delta` 写方向。可以给 `trust` 打一个 -5..5 的整数（-5 死敌 / 0 中立 / 5 生死之交），按正文实际写到的程度打，不要凭印象拔高：单章跳变超过 3 会被 `validate-facts` 拦下。
 - **配角**：本章首次出现且后续可能再出场的有名角色写 `cast_intros`；已在 characters.json 的核心角色与无名群众不写。
 - **hook_type / dominant_thread**：按实际章末与主导线填。
 - **outline_feedback**：正文与大纲有偏离，或写手在返回报告里说明了取舍，写进来给架构师；没有就 `null`。
