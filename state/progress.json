@@ -1,0 +1,11 @@
+{
+  "phase": "init",
+  "next_chapter": 1,
+  "last_committed": 0,
+  "gate": "per-arc",
+  "pending_revisions": [],
+  "arc_reviews_done": [],
+  "volume_reviews_done": [],
+  "steer_queue": [],
+  "updated_at": "2026-09-16T17:26:59+08:00"
+}
