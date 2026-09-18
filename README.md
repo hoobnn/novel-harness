@@ -44,3 +44,7 @@ python3 tools/novel.py commit N
 ```
 
 数据契约见 `docs/schemas.md`，调度协议见 `CLAUDE.md` / `AGENTS.md`。
+
+## 许可协议
+
+本项目以 [MIT License](LICENSE) 发布。

@@ -1,6 +1,7 @@
 {
   "name": "novel-harness",
   "private": true,
+  "license": "MIT",
   "type": "commonjs",
   "scripts": {
     "prepare": "husky"
