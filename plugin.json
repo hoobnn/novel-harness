@@ -1,0 +1,9 @@
+{
+  "name": "novel-harness",
+  "version": "0.1.0",
+  "description": "长篇小说创作 Agent 团队与确定性事实层工具（架构师、大纲规划、正文写作、连续性检查、主编评审、事实账本）。",
+  "author": {
+    "name": "hoobnn",
+    "email": "to192354134@gmail.com"
+  }
+}

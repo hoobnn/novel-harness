@@ -1,0 +1,15 @@
+{
+  "novel-post-write": {
+    "PostToolUse": [
+      {
+        "matcher": "write_to_file|replace_file_content",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ../tools/hooks/antigravity_post_write.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
