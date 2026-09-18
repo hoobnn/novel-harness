@@ -3,7 +3,7 @@
 > 在 Claude Code 与 Google Antigravity 里跑的长篇小说创作 Agent 团队。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.9+](https://img.shields.io/badge/Python-3.9%2B-blue.svg)](https://www.python.org/)
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green.svg)](tools/novel.py)
 
 写到第 80 章时，模型早已不记得第 12 章那把匕首给了谁、老周到底知不知道主角的身份、
@@ -22,7 +22,7 @@
 
 ## 快速开始
 
-需要 Python 3.9+（仅标准库，无需 `pip install`）和 Claude Code 或 Antigravity。
+需要 Python 3.10+（仅标准库，无需 `pip install`）和 Claude Code 或 Antigravity。
 
 ```bash
 git clone https://github.com/hoobnn/novel-harness.git
