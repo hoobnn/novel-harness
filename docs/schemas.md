@@ -34,6 +34,7 @@ chapters/
   facts/chNNNN.json        章节事实（账本员抽取，commit 时校验）
 summaries/chapters|arcs|volumes/
 state/progress.json        唯一进度事实源；state/decisions.jsonl 决策审计
+state/checkpoints.jsonl    步级进度（哪章哪步何时完成），崩溃后据此续跑；只记事实不参与路由
 index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重建，不入 git）
 ```
 
@@ -173,3 +174,14 @@ round 由主会话递增，最多 2 轮修订。第 2 轮后仍为 `polish` 则�
 
 只由 `novel.py` 写入。
 
+## state/checkpoints.jsonl（步级进度）
+
+```json
+{"at":"2026-09-18T15:20:45+08:00","chapter":12,"step":"writer","detail":"草稿 3600 字"}
+```
+
+`commit` / `finalize` 自动落盘；其余步骤由主会话在子智能体返回并通过校验后手动记一条：
+`python3 tools/novel.py checkpoint add 12 writer "草稿 3600 字"`。
+
+**它不参与路由判定** —— `route` 仍只看产物文件是否存在，因此手动删文件也能自愈。
+checkpoint 的用途是会话中断后用 `status.recent_steps` 快速看出「上次做到哪一步」，避免重跑整章。

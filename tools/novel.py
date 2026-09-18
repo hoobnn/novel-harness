@@ -35,6 +35,7 @@ ROOT = _resolve_root()
 P = {
     "progress": ROOT / "state/progress.json",
     "decisions": ROOT / "state/decisions.jsonl",
+    "checkpoints": ROOT / "state/checkpoints.jsonl",
     "premise": ROOT / "bible/premise.md",
     "characters": ROOT / "bible/characters.json",
     "char_dir": ROOT / "bible/characters",
@@ -351,6 +352,23 @@ def search(q: str, before: int | None, limit: int) -> dict:
                            (like, *args_tail, limit)).fetchall()
         res["chunks"] = [{"chapter": c, "idx": i, "snippet": excerpt(raw, q)} for c, i, raw in rows]
     return res
+
+
+# ---------------------------------------------------------------- checkpoints
+def checkpoint(chapter: int, step: str, detail: str = "") -> None:
+    """记一步已完成的工作。崩溃或中断后 `status` 能据此说明从哪一步继续。
+
+    只记录事实（哪章哪步在什么时候完成），不参与路由判定 ——
+    路由仍由产物文件的存在性决定，这样手动删文件也能自愈。
+    """
+    append_jsonl(P["checkpoints"], [{"at": now(), "chapter": chapter, "step": step, "detail": detail}])
+
+
+def last_checkpoints(chapter: int | None = None, limit: int = 8) -> list[dict]:
+    rows = read_jsonl(P["checkpoints"])
+    if chapter is not None:
+        rows = [r for r in rows if r.get("chapter") == chapter]
+    return rows[-limit:]
 
 
 # ---------------------------------------------------------------- progress / route
@@ -781,6 +799,27 @@ def md_list(items, fmt=lambda x: str(x)) -> str:
     return "\n".join(f"- {fmt(x)}" for x in items) if items else "- （无）"
 
 
+# 每个角色实际用得上的上下文段落。装配时按需注入，避免把整包喂给所有角色：
+# ledger 只做结构化抽取，不需要文风与评审教训；checker 只核事实，不需要声音卡与口头禅镜像。
+ROLE_NEEDS = {
+    "planner": {"outline", "compass", "summaries", "timeline", "threads_full", "characters",
+                "knowledge", "cast", "retrieval", "lessons", "style_brief"},
+    "writer":  {"outline", "compass", "summaries", "prev_tail", "timeline", "threads_full",
+                "characters", "knowledge", "voice_card", "cast", "retrieval", "lessons",
+                "style_full", "style_mirror", "plan"},
+    "checker": {"outline", "summaries", "timeline", "threads_full", "characters", "knowledge",
+                "cast", "retrieval", "plan", "deterministic"},
+    "editor":  {"outline", "compass", "summaries", "prev_tail", "threads_full", "characters",
+                "voice_card", "lessons", "style_full", "style_mirror", "plan", "deterministic"},
+    "ledger":  {"outline", "summaries", "timeline", "threads_brief", "characters", "knowledge",
+                "cast", "retrieval"},
+}
+
+
+def needs(role: str, section: str) -> bool:
+    return section in ROLE_NEEDS.get(role, set())
+
+
 def build_context(n: int, role: str) -> str:
     p = load_progress()
     rules = style_rules()
@@ -807,17 +846,22 @@ def build_context(n: int, role: str) -> str:
         out += ["", "## 位置与大纲", "（本章尚无大纲条目）"]
     # compass
     compass = read_json(P["compass"], {})
-    if compass:
+    if compass and needs(role, "compass"):
         out += ["", "## 指南针", f"终局方向：{compass.get('ending_direction', '')}",
                 f"活跃长线：{compass.get('open_threads', [])}", f"规模估计：{compass.get('estimated_scale', '')}"]
     # summaries: layered
     out += ["", "## 前情（分层摘要）"]
     vols = sorted(P["sum_vol"].glob("v*.json"))
+    cur_vol = entry["volume"] if entry else 10**9
     for f in vols:
         v = read_json(f, {})
-        if entry and v.get("volume") == entry["volume"]:
+        vn = v.get("volume") or 0
+        if vn == cur_vol:
             continue
-        out.append(f"- 卷 {v.get('volume')}《{v.get('title', '')}》：{v.get('summary', '')}")
+        if vn >= cur_vol - 1:  # 相邻一卷给全文
+            out.append(f"- 卷 {vn}《{v.get('title', '')}》：{v.get('summary', '')}")
+        else:  # 更早的卷只留标题，细节靠指南针与检索
+            out.append(f"- 卷 {vn}《{v.get('title', '')}》（更早，需细节用 `novel.py search`）")
     for f in sorted(P["sum_arc"].glob("v*.json")):
         a = read_json(f, {})
         if entry and (a.get("volume"), a.get("arc")) == (entry["volume"], entry["arc"]):
@@ -831,21 +875,27 @@ def build_context(n: int, role: str) -> str:
         s = read_json(ch_path("sum_ch", m, "json"), None)
         if s:
             out.append(f"- 第 {m} 章《{s.get('title', '')}》[D{s.get('day_start')}–D{s.get('day_end')}]：{s.get('summary', '')}")
-    if n > 1:
+    if n > 1 and needs(role, "prev_tail"):
         prev_text = read_text(ch_path("final", n - 1, "md"))
         if prev_text:
             out += ["", "## 上一章结尾（衔接语气与节奏，不要复述）", "```", tail(prev_text), "```"]
     # timeline
-    tl = read_jsonl(P["timeline"])
+    tl = read_jsonl(P["timeline"]) if needs(role, "timeline") else []
     if tl:
         out += ["", "## 时间线（最近事件）", f"日历规则见 bible/world/calendar.md。上章结束于故事第 {tl[-1].get('day')} 天。"]
         out.append(md_list(tl[-8:], lambda e: f"ch{e['chapter']} D{e.get('day')} {e.get('time_of_day', '')} @{e.get('location', '')}: {e['event']} [{','.join(e.get('characters', []))}]"))
     # threads
     tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
     active = [t for t in tv if t["status"] in ("active", "dormant", "planned")]
-    if active:
+    plan_ids = set(entry.get("threads") or []) if entry else set()
+    # 分级：本章相关/到期/超期给全量，其余只给一行，避免后期几十条线程压垮上下文
+    # 三级：本章涉及/到期 -> 全量；仅停滞 -> 一行提醒；其余 -> 只留 id 与标题
+    hot = [t for t in active if t["id"] in plan_ids or t["payoff_due"] or t["payoff_overdue"]]
+    warm = [t for t in active if t not in hot and t["stale"]]
+    cold = [t for t in active if t not in hot and t not in warm]
+    if active and needs(role, "threads_full"):
         out += ["", "## 故事线台账（本章必须至少推进一条主线或到期线）"]
-        for t in active:
+        for t in hot:
             flags = []
             if t["stale"]:
                 flags.append(f"⚠ {t['idle']} 章未动")
@@ -853,11 +903,19 @@ def build_context(n: int, role: str) -> str:
                 flags.append("⚠ 超过兑现窗口")
             elif t["payoff_due"]:
                 flags.append("兑现窗口已到")
-            if entry and t["id"] in (entry.get("threads") or []):
+            if t["id"] in plan_ids:
                 flags.append("★本章计划涉及")
             last = (t.get("milestones") or [{}])[-1]
             last_s = f"上次 ch{t.get('last_touched')}：{last.get('note', '')}" if t.get("last_touched") else "尚未在正文落地"
             out.append(f"- {t['id']} [{t['type']}/{t['status']}] {t['title']}：承诺「{t.get('promise', '')}」；{last_s}；兑现窗口 {t.get('payoff_window')} {' '.join(flags)}")
+        for t in warm:
+            out.append(f"- {t['id']}《{t['title']}》已 {t['idle']} 章未推进 ⚠（细节用 `novel.py threads --id {t['id']}`）")
+        if cold:
+            out.append("其余在途线程（需要细节用 `novel.py threads --id T0X`）："
+                       + "、".join(f"{t['id']}《{t['title']}》" for t in cold))
+    elif active and needs(role, "threads_brief"):
+        out += ["", "## 在途故事线（仅供登记动作时对号入座）"]
+        out.append("、".join(f"{t['id']}《{t['title']}》[{t['status']}]" for t in active))
     # characters
     chars_in = set(entry.get("characters", []) if entry else [])
     for t in active:
@@ -875,19 +933,20 @@ def build_context(n: int, role: str) -> str:
         out.append(f"- 位置：{st.get('location')}；最后出场 ch{st.get('last_seen')}；状态字段：{json.dumps(st.get('fields', {}), ensure_ascii=False)}")
         if st.get("relations"):
             out.append(f"- 关系：{json.dumps(st['relations'], ensure_ascii=False)}")
-        if know:
+        if know and needs(role, "knowledge"):
             out.append("- 知道/怀疑：" + "；".join(f"[{k['status']} ch{k['chapter']}] {k['fact']}" for k in know))
-        card = character_card(c["name"])
-        voice = re.search(r"##\s*声音卡\s*\n([\s\S]*?)(?=\n## |\Z)", card)
-        if voice:
-            out.append("- 声音卡：\n" + "\n".join("  " + l for l in voice.group(1).strip().split("\n")))
+        if needs(role, "voice_card"):
+            card = character_card(c["name"])
+            voice = re.search(r"##\s*声音卡\s*\n([\s\S]*?)(?=\n## |\Z)", card)
+            if voice:
+                out.append("- 声音卡：\n" + "\n".join("  " + l for l in voice.group(1).strip().split("\n")))
     cast = read_json(P["cast"], {})
-    recent_cast = sorted(cast.items(), key=lambda kv: -(kv[1].get("last_seen") or 0))[:12]
+    recent_cast = sorted(cast.items(), key=lambda kv: -(kv[1].get("last_seen") or 0))[:12] if needs(role, "cast") else []
     if recent_cast:
         out += ["", "## 近期活跃配角（再次出场前先 `novel.py recall --entity 名字` 找回口吻）"]
         out.append(md_list(recent_cast, lambda kv: f"{kv[0]}：{kv[1].get('brief_role', '')}（首见 ch{kv[1].get('first_seen')}，末见 ch{kv[1].get('last_seen')}，{kv[1].get('count')} 次）"))
     # retrieval: related scenes
-    if entry and p["last_committed"] > 0:
+    if entry and p["last_committed"] > 0 and needs(role, "retrieval"):
         q_terms = set()
         for c in entry.get("characters", []):
             q_terms.add(c)
@@ -905,11 +964,14 @@ def build_context(n: int, role: str) -> str:
             out += ["", "## 检索到的相关历史场景（按需 `novel.py search` 深挖或直接读 chapters/final）"]
             out.append(md_list(rel[:12], lambda s: f"ch{s['chapter']} {s['scene_id']} D{s.get('day')} @{s.get('location')} [{s.get('characters')}]: {s.get('summary')}"))
     # style
-    out += ["", "## 文风约束", read_text(P["voice"]).strip() or "（bible/style/voice.md 未写）"]
+    if needs(role, "style_full"):
+        out += ["", "## 文风约束", read_text(P["voice"]).strip() or "（bible/style/voice.md 未写）"]
+    elif needs(role, "style_brief"):
+        out += ["", "## 文风约束（要点）", f"目标字数 {rules.get('word_count')}；禁用套句见 bible/style/rules.json；完整标准见 bible/style/voice.md"]
     ur = read_text(P["user_rules"]).strip()
-    if ur:
+    if ur and (needs(role, "style_full") or needs(role, "style_brief")):
         out += ["", "### 用户偏好（优先级高于默认文风）", ur]
-    st = stylestat(upto=n - 1)
+    st = stylestat(upto=n - 1) if needs(role, "style_mirror") else {}
     if st.get("patterns") or st.get("top_phrases"):
         out += ["", "### 你自己的口头禅镜像（全书统计，本章主动压低）"]
         out.append("句式模式章均：" + "；".join(f"{x['name']} {x['per_chapter']}" for x in st.get("patterns", [])[:6]))
@@ -918,7 +980,7 @@ def build_context(n: int, role: str) -> str:
         out.append(f"章末短句收尾占比 {st.get('ending', {}).get('short_ratio')}；开篇时间词率 {st.get('opening_time_rate')}；近期钩子类型 {st.get('hook_types_recent')}")
     # reviews lessons
     lessons = []
-    for m in range(max(1, n - 5), n):
+    for m in range(max(1, n - 5), n) if needs(role, "lessons") else []:
         r = read_json(ch_path("reviews", m, "json"), None)
         if r:
             for iss in r.get("issues", [])[:3]:
@@ -1068,6 +1130,7 @@ def commit(n: int, force: bool = False) -> None:
     p["pending_revisions"] = [r for r in p.get("pending_revisions", []) if r.get("chapter") != n]
     save_progress(p)
     append_jsonl(P["decisions"], [{"at": now(), "kind": "commit", "chapter": n, "sha": digest[:12], "words": wc(final)}])
+    checkpoint(n, "commit", f"{wc(final)} 字，sha {digest[:12]}")
     entry = locate(n)
     flags = []
     if entry and entry["arc_index"] == entry["arc_total"]:
@@ -1143,6 +1206,7 @@ def status() -> dict:
     rules = style_rules()
     tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
     return {"progress": p, "route": r, "foundation_missing": foundation_missing(),
+            "recent_steps": last_checkpoints(limit=5),
             "threads": {"active": sum(t["status"] == "active" for t in tv), "stale": [t["id"] for t in tv if t["stale"]],
                         "overdue": [t["id"] for t in tv if t["payoff_overdue"]]},
             "unsynced": sync_check(), "words_total": sum(wc(read_text(f)) for f in P["final"].glob("ch*.md"))}
@@ -1217,6 +1281,11 @@ def main(argv: list[str]) -> None:
     s.add_argument("mode", choices=["auto", "per-chapter", "per-arc"])
     s = sub.add_parser("set-phase", help="设置 phase：foundation|writing|complete")
     s.add_argument("phase", choices=["init", "foundation", "writing", "complete"])
+    s = sub.add_parser("checkpoint", help="记录/查看步级进度：add <章> <步骤> [说明] | list [章]")
+    s.add_argument("op", choices=["add", "list"])
+    s.add_argument("chapter", nargs="?", type=int)
+    s.add_argument("step", nargs="?")
+    s.add_argument("detail", nargs="?", default="")
     sub.add_parser("sync", help="检测被手动修改过的定稿")
     sub.add_parser("reindex", help="重建全文索引")
     a = ap.parse_args(argv)
@@ -1288,6 +1357,7 @@ def main(argv: list[str]) -> None:
             fail(f"第 {a.chapter} 章已提交；覆盖定稿会让账本与正文脱节。"
                  f"确需返工请走 queue-revision，或显式 --force")
         ch_path("final", a.chapter, "md").write_text(d, encoding="utf-8")
+        checkpoint(a.chapter, "finalize", f"{wc(d)} 字")
         print(f"finalized ch{a.chapter:04d} ({wc(d)} 字)")
     elif a.cmd == "review-done":
         p = load_progress()
@@ -1323,6 +1393,14 @@ def main(argv: list[str]) -> None:
         p["phase"] = a.phase
         save_progress(p)
         print(f"phase={a.phase}")
+    elif a.cmd == "checkpoint":
+        if a.op == "add":
+            if a.chapter is None or not a.step:
+                fail("用法：checkpoint add <章号> <步骤名> [说明]")
+            checkpoint(a.chapter, a.step, a.detail)
+            print(f"checkpoint ch{a.chapter:04d} {a.step}")
+        else:
+            print(json.dumps(last_checkpoints(a.chapter, 20), ensure_ascii=False, indent=1))
     elif a.cmd == "sync":
         print(json.dumps(sync_check(), ensure_ascii=False, indent=1))
     elif a.cmd == "reindex":

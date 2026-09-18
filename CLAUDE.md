@@ -8,7 +8,7 @@
 
 1. `python3 tools/novel.py status` → 读取 `route.action`。
 2. 按下表派发。派发时把章节号、输入文件路径、输出文件路径、完成判据写进给子智能体的 prompt。
-3. 子智能体返回后，用工具校验产物（见「完成判据」列），不通过就带着错误信息重派同一角色，最多 2 次。
+3. 子智能体返回后，用工具校验产物（见「完成判据」列），不通过就带着错误信息重派同一角色，最多 2 次。校验通过后记一步 `novel.py checkpoint add <章> <角色>`，会话中断时靠它判断续跑位置。
 4. 再跑一次 `status`，直到命中闸门或 `done`。
 
 | route.action | 派给 | 输入 | 产物 | 完成判据 |
@@ -77,4 +77,6 @@ python3 tools/novel.py timeline --entity 林越
 python3 tools/novel.py threads --stale
 python3 tools/novel.py check 12 / lint 12 / stylestat
 python3 tools/novel.py gate per-chapter
+python3 tools/novel.py checkpoint add 12 writer "草稿 3600 字"   # 子智能体返回并校验通过后记一步
+python3 tools/novel.py checkpoint list 12
 ```
