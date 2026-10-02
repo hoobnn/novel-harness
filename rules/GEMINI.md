@@ -1,1 +1,1 @@
-../CLAUDE.md
+../docs/protocol.md

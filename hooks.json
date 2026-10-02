@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash ./tools/hooks/antigravity_post_write.sh"
+            "command": "bash ./tools/hooks/post_write.sh"
           }
         ]
       }

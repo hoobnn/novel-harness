@@ -1,12 +1,12 @@
 # Antigravity 适配规则与子智能体派发契约
 
-本项目主流程规范见 [AGENTS.md](file:///Users/haobin/Code/personal/novel/novel-harness/AGENTS.md)（与 CLAUDE.md 同步）。
+本 harness 的主流程规范见 [docs/protocol.md](../../docs/protocol.md)（`init` 会把它复制进每个小说工作区的 `docs/protocol.md`）。
 
 在 Antigravity 环境中运行本 harness 时，遵守以下派发与执行规则：
 
 ## 1. 角色与子智能体派发 (Subagent Dispatch)
 
-`.agents/agents/`（即 `.claude/agents/`）包含七个专业角色：
+`.agents/agents/`（即插件根目录 `agents/`）包含七个专业角色：
 - `architect`：长篇规划师
 - `planner`：单章细纲规划师
 - `writer`：正文起草与修订
@@ -30,6 +30,6 @@
 
 ## 2. 工具调用与自动化
 
-- 所有事实层判定、路由查询、状态流转统一通过 `run_command` 调用 `python3 tools/novel.py <command>`（若当前小说工作区尚未复制 `tools/novel.py`，可直接调用插件目录下的 `tools/novel.py`）。
+- 所有事实层判定、路由查询、状态流转统一通过 `run_command` 调用工作区里的 `python3 tools/novel.py <command>`。新建工作区时先运行 `python3 <插件目录>/tools/novel.py init`，它会把 `tools/novel.py`、钩子与 `docs/` 契约复制进工作区。
 - 绝不手工直接修改 `ledger/`、`state/`、`summaries/chapters/`、`index/`。
 - 正文草稿只写入 `chapters/drafts/`，定稿由 `python3 tools/novel.py finalize N` 自动转入 `chapters/final/`。

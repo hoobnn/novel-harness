@@ -1,0 +1,17 @@
+{
+  "description": "章节草稿/定稿写入后自动 lint，事实文件写入后自动 validate-facts；问题以 exit 2 回传模型。",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/tools/hooks/post_write.sh\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

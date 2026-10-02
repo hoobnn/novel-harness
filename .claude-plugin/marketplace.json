@@ -1,0 +1,17 @@
+{
+  "name": "novel-harness",
+  "owner": { "name": "hoobnn", "email": "853555@gmail.com" },
+  "metadata": {
+    "description": "在 Claude Code 里写长篇小说的 Agent 团队与事实层工具",
+    "version": "0.2.0"
+  },
+  "plugins": [
+    {
+      "name": "novel-harness",
+      "source": "./",
+      "description": "长篇小说创作 Agent 团队：七个角色分工写作、评审与记账，novel.py 用账本替代模型记忆，保证几十万字的连续性。",
+      "category": "writing",
+      "tags": ["novel", "fiction", "writing", "agents", "chinese"]
+    }
+  ]
+}
