@@ -1345,6 +1345,56 @@ def _vendor_claude_components(src_root: Path) -> list[str]:
     return done
 
 
+CODEX_SANDBOX = {"checker": "read-only", "judge": "read-only"}   # 其余角色要写工作区文件
+
+
+def _parse_agent_md(path: Path) -> tuple[dict, str]:
+    """读角色 markdown：frontmatter（name/description/...）与正文。"""
+    text = path.read_text(encoding="utf-8")
+    meta: dict = {}
+    body = text
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            for line in text[3:end].strip().splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    meta[k.strip()] = v.strip()
+            body = text[end + 4:].lstrip("\n")
+    return meta, body
+
+
+def _toml_str(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _vendor_codex_agents(src_root: Path, overwrite: bool = False) -> list[str]:
+    """把 agents/*.md 转成 Codex 子智能体定义 .codex/agents/<role>.toml。
+    Codex 按 name 字段识别；model 不写（模型名不通用，沿用会话默认）；只读角色给 read-only 沙箱。"""
+    src = src_root / "agents"
+    if not src.is_dir():
+        return []
+    dst_dir = ROOT / ".codex/agents"
+    done = []
+    for f in sorted(src.glob("*.md")):
+        meta, body = _parse_agent_md(f)
+        name = meta.get("name") or f.stem
+        dst = dst_dir / f"{name}.toml"
+        if dst.exists() and not overwrite:
+            continue
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        body = body.replace('"""', "'''")   # 正文里不能出现 TOML 多行字符串的结束符
+        tq = chr(34) * 3   # TOML 多行字符串定界符
+        toml = (f"# 由 novel-harness 从 agents/{f.name} 生成；改角色请改源文件后 novel.py upgrade\n"
+                f"name = {_toml_str(name)}\n"
+                f"description = {_toml_str(meta.get('description', ''))}\n"
+                f"sandbox_mode = {_toml_str(CODEX_SANDBOX.get(name, 'workspace-write'))}\n"
+                "developer_instructions = " + tq + "\n" + body.rstrip() + "\n" + tq + "\n")
+        dst.write_text(toml, encoding="utf-8")
+        done.append(f".codex/agents/{name}.toml")
+    return done
+
+
 def init_project(standalone: bool = False) -> None:
     if ROOT.resolve() == HARNESS_ROOT.resolve() and (HARNESS_ROOT / TEMPLATE_DIR).is_dir():
         fail("这是 harness 本身的目录，不能当作小说工作区。到一个空目录（或你的小说目录）里运行 init。")
@@ -1370,6 +1420,7 @@ def init_project(standalone: bool = False) -> None:
         _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")
     if standalone:
         written += _vendor_claude_components(HARNESS_ROOT)
+        written += _vendor_codex_agents(HARNESS_ROOT)
     settings = _write_claude_settings(standalone)
     if settings:
         written.append(settings)
@@ -1421,6 +1472,8 @@ def _refresh_standalone_components(src_root: Path) -> list[str]:
             if d.is_dir():
                 shutil.copytree(d, skills / d.name, dirs_exist_ok=True)
         done.append(".claude/skills/")
+    if (ROOT / ".codex/agents").is_dir() or agents.is_dir():   # standalone 工作区：旧版本没生成过也补上
+        done += _vendor_codex_agents(src_root, overwrite=True)
     return done
 
 

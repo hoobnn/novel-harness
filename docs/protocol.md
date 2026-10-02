@@ -67,7 +67,8 @@
 
 - **Claude Code**：用 Agent 工具直接派发角色（插件模式 `novel-harness:<role>`，standalone 模式 `<role>`）。
 - **Antigravity (AGY)**：首次派发某角色前，从插件目录 `agents/<role>.md` 读取其提示词，调用 `define_subagent` 注册子智能体；随后调用 `invoke_subagent` 派发。`checker+editor` 在一次 `invoke_subagent` 调用中传入两项配置以并行执行。
-- **其他运行时（Codex 等）**：没有子智能体时由主会话按角色文件逐个扮演，但产物、校验与状态推进规则不变。
+- **Codex**：standalone 初始化会把七个角色生成为 `.codex/agents/<role>.toml`（Codex 按 `name` 字段识别自定义子智能体，checker / judge 为只读沙箱）。派发时在指令里点名角色，例如「让 planner 规划第 N 章」；`checker+editor` 在同一条指令里点名两个角色即并行。Codex 从 `.agents/skills/` 读 skill，用 `$novel-next` 这类写法显式调用。
+- **没有子智能体机制的运行时**：由主会话按角色文件逐个扮演，但产物、校验与状态推进规则不变。
 
 ## 常用命令
 

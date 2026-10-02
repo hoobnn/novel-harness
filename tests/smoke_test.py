@@ -106,6 +106,16 @@ def main() -> None:
         check(r.returncode == 0 and (ws3 / ".claude/agents/writer.md").exists() and (ws3 / ".claude/skills/novel-next/SKILL.md").exists(), "standalone 复制角色与 skill")
         settings = json.loads((ws3 / ".claude/settings.json").read_text())
         check("PostToolUse" in settings.get("hooks", {}), "standalone 写入钩子")
+        codex = ws3 / ".codex/agents"
+        check(len(list(codex.glob("*.toml"))) == len(list((HARNESS / "agents").glob("*.md"))), "standalone 生成 Codex 子智能体 .codex/agents/*.toml")
+        try:
+            import tomllib
+            w = tomllib.loads((codex / "writer.toml").read_text(encoding="utf-8"))
+            c = tomllib.loads((codex / "checker.toml").read_text(encoding="utf-8"))
+            check(w["name"] == "writer" and w["sandbox_mode"] == "workspace-write" and "你是写手" in w["developer_instructions"]
+                  and c["sandbox_mode"] == "read-only", "Codex TOML 可解析：name / sandbox_mode / developer_instructions")
+        except ModuleNotFoundError:
+            print("skip tomllib (<3.11)")
         # 6. 只装了 skill（npx skills）：init.sh 找不到插件，回退到本地缓存并 --standalone
         ws4 = tmp / "skills-only"
         (ws4 / ".claude/skills").mkdir(parents=True)
@@ -130,8 +140,8 @@ def main() -> None:
             shutil.copy2(HARNESS / "tools/novel.py", dst)
         (ws5 / "docs/protocol.md").write_text("stale", encoding="utf-8")
         r = run(sys.executable, "tools/novel.py", "upgrade", cwd=ws5, env={"XDG_CACHE_HOME": str(cache_home)})
-        check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/" in r.stdout,
-              "工作区自身的 novel.py 能从缓存 upgrade 并刷新角色")
+        check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/" in r.stdout
+              and ".codex/agents/writer.toml" in r.stdout, "工作区自身的 novel.py 能从缓存 upgrade 并刷新 Claude 与 Codex 角色")
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

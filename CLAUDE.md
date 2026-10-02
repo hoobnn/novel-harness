@@ -22,7 +22,7 @@ tests/smoke_test.py        冒烟测试：脚手架、路由、钩子两种载�
 
 - 改任何文件格式先读 `docs/schemas.md`；改路由先读 `docs/protocol.md` 与 `novel.py` 的 `route()`。
 - 随版本分发进工作区的文件清单是 `novel.py` 里的 `VENDORED`；新增这类文件要同时加进去。
-- 三种安装方式：Claude Code 插件（自带市场）、`claude --plugin-dir`、`npx skills add`（只装 skill，`init.sh` 克隆仓库到 `~/.cache/novel-harness/src` 后 standalone 初始化）。改 `init.sh` 或 `upgrade` 时三条路径都要过冒烟测试。
+- 三种安装方式：Claude Code 插件（自带市场）、`claude --plugin-dir`、`npx skills add`（只装 skill，`init.sh` 克隆仓库到 `~/.cache/novel-harness/src` 后 standalone 初始化）。standalone 同时生成 Codex 子智能体 `.codex/agents/*.toml`，由 `agents/*.md` 的 frontmatter 与正文转换而来，角色改动只改 markdown 源。改 `init.sh` 或 `upgrade` 时三条路径都要过冒烟测试。
 - 发版改四处版本号：`novel.py` 的 `__version__`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、根 `plugin.json`。
 - 验证：`python3 tests/smoke_test.py`；`claude plugin validate . --strict`（市场清单）、`claude plugin validate skills --strict`、`claude plugin validate agents --strict`；`claude plugin validate .claude-plugin/plugin.json` 会有且只有一条警告：根目录 CLAUDE.md 不会作为插件上下文分发。这是有意的，它只是本仓库的贡献者指南，运行期协议在 `docs/protocol.md`。本地试用：`claude --plugin-dir .`，再到一个空目录里 `/novel-harness:novel-init …`。
 - 提交信息遵循 commitlint（gitmoji + Conventional Commits），带 Co-Authored-By 署名。
