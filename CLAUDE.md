@@ -1,82 +1,27 @@
-# novel-harness：长篇小说创作 Agent 团队
+# novel-harness（插件仓库）
 
-主会话（你）是**确定性引擎**：读事实、查路由、派发子智能体、校验产物、推进状态。你自己不写正文、不做文学判断、不手改账本。所有需要判断力的工作都派给 `.claude/agents/` 下的角色，所有能用代码判定的事情都交给 `tools/novel.py`。
+这是 novel-harness 的**插件源码仓库**，不是小说工作区：这里没有 `bible/`、`chapters/`、`state/`。小说在用户自己的目录里，由 `python3 tools/novel.py init` 脚手架生成。运行期的调度协议在 `docs/protocol.md`，数据契约在 `docs/schemas.md`，两者随 `tools/novel.py` 一起复制进每个工作区。
 
-数据契约唯一口径：`docs/schemas.md`。改任何文件格式前先读它。
+## 布局
 
-## 每轮循环
-
-1. `python3 tools/novel.py status` → 读取 `route.action`。
-2. 按下表派发。派发时把章节号、输入文件路径、输出文件路径、完成判据写进给子智能体的 prompt。
-3. 子智能体返回后，用工具校验产物（见「完成判据」列），不通过就带着错误信息重派同一角色，最多 2 次。校验通过后记一步 `novel.py checkpoint add <章> <角色>`，会话中断时靠它判断续跑位置。
-4. 再跑一次 `status`，直到命中闸门或 `done`。
-
-| route.action | 派给 | 输入 | 产物 | 完成判据 |
-|---|---|---|---|---|
-| `architect:foundation` | architect | 用户需求 + `status.foundation_missing` | bible/、outline/、threads/registry.json | `status.foundation_missing` 为空；然后**必须停下让用户审阅**，用户确认后 `set-phase writing` |
-| `architect:expand-arc` | architect | route 里的 volume/arc/goal | `outline/volumes.json` 该弧 `chapters` 填满 | `locate <next_chapter>` 返回条目 |
-| `architect:new-volume` / `finale-check` | architect | 卷摘要、指南针、线程台账 | 追加新卷或宣告收官/完结 | 同上；完结时 `set-phase complete` |
-| `planner` | planner | `context N --for planner` | `chapters/plans/chNNNN.md` | 文件存在且含「场景节拍表」「线程预算」「契约」三节 |
-| `writer` | writer | `context N --for writer` | `chapters/drafts/chNNNN.md` | `lint N` 的 `issues` 为空（warnings 允许） |
-| `checker+editor` | checker 与 editor **并行**派发 | `context N --for checker/editor` | checker 结论并入 editor 产物 `chapters/reviews/chNNNN.json` | 文件存在且 `verdict` 合法；`round` 字段等于当前轮次 |
-| `writer:revise` | writer（修订模式） | review 的 `revision_instructions` + 草稿 | 覆盖 `chapters/drafts/chNNNN.md` | `lint` 通过；随后删除旧 review，回到 `checker+editor`，`round` 加 1 |
-| `finalize` | 你自己执行 | — | `novel.py finalize N` | 定稿文件存在 |
-| `ledger` | ledger | 定稿 + 计划 | `chapters/facts/chNNNN.json` | `validate-facts N` 输出 OK |
-| `commit` | 你自己执行 | — | `novel.py commit N` | 输出含 `committed`；检查 `flags` |
-| `editor:arc-review` | editor（弧级模式） | route 里的章节区间 | `summaries/arcs/vXaY.json` + 需返工章节 `queue-revision` | 文件存在后 `review-done vXaY` |
-| `editor:volume-review` | editor（卷级模式） | 本卷弧摘要 | `summaries/volumes/vX.json` | `review-done vX` |
-| `revise` | editor 定范围 → writer 修订 → ledger 重抽 → `commit N --force` | `pending_revisions[0]` | 定稿与事实更新 | 队列弹出 |
-| `steer` | 见「用户干预」 | `steer_queue[0]` | — | `steer pop` |
-
-修订轮次上限 2。第 2 轮后仍是 `polish` 就直接 finalize，把遗留问题写进 facts 的 `outline_feedback`；仍是 `rewrite` 则停下问用户。
-
-## 闸门（人工检查点）
-
-`progress.gate`：
-- `per-arc`（默认）：弧级评审完成后停下，把弧摘要和评审结论给用户看，用户说继续才展开下一弧。
-- `per-chapter`：每章 commit 后停下。
-- `auto`：只在基础设定完成、卷结束、完结、修订 2 轮仍 rewrite 时停下。
-
-用户说「写到第 N 章」：忽略闸门直到 `last_committed >= N`，然后停下。
-
-## 硬约束
-
-- `ledger/`、`state/`、`summaries/chapters/`、`index/` 只由 `novel.py` 写入。任何 Agent 都不得手改。
-- 正文只出现在 `chapters/drafts` 与 `chapters/final`，Agent 在聊天里输出正文不算完成。
-- 子智能体之间不共享上下文，一切靠文件。给子智能体的 prompt 必须包含：章节号、要读的文件、要写的文件、完成判据、不要做什么。
-- 不把整本书塞进任何一个上下文。需要前文时用 `novel.py context / search / recall / timeline`。
-- `bible/` 是权威设定，写作期只有 architect（经用户干预授权）可以修改；发现设定冲突先记到 `outline_feedback`，不要顺手改设定。
-- commit 后 `git add -A && git commit -m "ch0012 <标题>"`（本项目 AI 署名偏好未记录，首次提交前询问用户）。
-
-## 用户干预（/novel-steer 或用户直接说）
-
-先 `novel.py steer add "<原话>"`，然后分诊，只做原话要求的事：
-1. 文风或偏好类（「多用短句」「主角别太圣母」）→ 追加到 `bible/style/user-rules.md`，`steer pop`。
-2. 后续走向类（「感情线提前」「加个反派」）→ 派 architect 增量修改大纲/线程/人物卡，不动已提交章节。
-3. 已写内容返工类（「第 4 章重写」「把 X 改成女性」）→ 派 editor 圈定**最小充分章节集合**并逐个 `queue-revision`，走 `revise` 路由。
-4. 控制类（「写到第 20 章」「停」「gate auto」）→ 直接执行。
-
-## 模型与成本
-
-- 创作角色（architect / planner / writer / editor / judge）用主会话模型；抽取与核对角色（ledger / checker）用 sonnet。可在 `.claude/agents/*.md` 的 `model` 字段调整。
-- 上下文包已经把前情、账本、检索结果装配好，子智能体不要再全量读 `chapters/final`；确需回读时只读 1 到 2 章。
-
-## 子智能体派发与运行环境
-
-- **Claude Code**：直接派发 `.claude/agents/*.md` 下定义的角色。
-- **Antigravity (AGY)**：首次派发某角色前，从 `agents/<role>.md`（或插件目录）读取其提示词，调用 `define_subagent` 注册子智能体；随后调用 `invoke_subagent` 派发。`checker+editor` 在一次 `invoke_subagent` 调用中传入两项配置以并行执行。
-
-## 常用命令
-
-```bash
-python3 tools/novel.py status                 # 进度 + 路由
-python3 tools/novel.py context 12 --for writer
-python3 tools/novel.py search "铁匠铺" --before 12
-python3 tools/novel.py recall --entity 老周
-python3 tools/novel.py timeline --entity 林越
-python3 tools/novel.py threads --stale
-python3 tools/novel.py check 12 / lint 12 / stylestat
-python3 tools/novel.py gate per-chapter
-python3 tools/novel.py checkpoint add 12 writer "草稿 3600 字"   # 子智能体返回并校验通过后记一步
-python3 tools/novel.py checkpoint list 12
 ```
+agents/                    七个角色（插件自动发现，名字带前缀 novel-harness:）
+skills/                    六个入口 skill（/novel-harness:novel-*）
+hooks/hooks.json           Claude Code 插件钩子 → tools/hooks/post_write.sh
+tools/novel.py             事实层：单文件、仅标准库；init 时复制进工作区
+tools/hooks/post_write.sh  写入后校验钩子（Claude Code / Antigravity 共用，根目录从被写文件向上找）
+docs/protocol.md           调度协议（随版本分发）
+docs/schemas.md            数据契约（随版本分发）
+templates/workspace/       新工作区种子：CLAUDE.md、文风标准、.gitignore（只在 init 播种，之后归用户）
+.claude-plugin/            plugin.json + marketplace.json（单插件仓库自带市场）
+plugin.json hooks.json rules/ .agents/   Antigravity 侧的插件表面
+tests/smoke_test.py        冒烟测试：脚手架、路由、钩子两种载荷
+```
+
+## 改动规则
+
+- 改任何文件格式先读 `docs/schemas.md`；改路由先读 `docs/protocol.md` 与 `novel.py` 的 `route()`。
+- 随版本分发进工作区的文件清单是 `novel.py` 里的 `VENDORED`；新增这类文件要同时加进去。
+- 发版改四处版本号：`novel.py` 的 `__version__`、`.claude-plugin/plugin.json`、`.claude-plugin/marketplace.json`、根 `plugin.json`。
+- 验证：`python3 tests/smoke_test.py`；`claude plugin validate . --strict`（市场清单）、`claude plugin validate skills --strict`、`claude plugin validate agents --strict`；`claude plugin validate .claude-plugin/plugin.json` 会有且只有一条警告：根目录 CLAUDE.md 不会作为插件上下文分发。这是有意的，它只是本仓库的贡献者指南，运行期协议在 `docs/protocol.md`。本地试用：`claude --plugin-dir .`，再到一个空目录里 `/novel-harness:novel-init …`。
+- 提交信息遵循 commitlint（gitmoji + Conventional Commits），带 Co-Authored-By 署名。
