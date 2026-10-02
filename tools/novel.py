@@ -5,7 +5,10 @@
 进度路由、上下文装配、全文检索、时间线校验、故事线台账、人物状态/知识账本、
 文体统计、提交校验与落盘。需要判断力的事情（写什么、怎么写、好不好）留给 Agent。
 
-用法: python3 tools/novel.py <command> [args]   （在项目根目录运行）
+用法: python3 tools/novel.py <command> [args]   （在小说工作区内任意目录运行）
+
+本文件随 harness 分发：`init` 会把它连同钩子与数据契约复制进新工作区，
+工作区从此自洽，不依赖插件安装路径；`upgrade` 从插件目录刷新这些文件。
 """
 from __future__ import annotations
 
@@ -20,15 +23,42 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
+__version__ = "0.2.0"
+WORKSPACE_MARKER = "state/progress.json"      # 有它才算小说工作区
+HARNESS_ROOT = Path(__file__).resolve().parent.parent   # 本文件所在的 harness（插件目录或工作区）
+VENDORED = [                                   # 随 harness 版本走、init 复制进工作区、upgrade 刷新
+    "tools/novel.py",
+    "tools/hooks/post_write.sh",
+    "docs/schemas.md",
+    "docs/protocol.md",
+]
+TEMPLATE_DIR = "templates/workspace"           # 只在 init 时播种、之后归用户所有的文件
+ROOTLESS_CMDS = {"", "-h", "--help", "version"}
+
+
+def find_workspace(start: Path) -> Path | None:
+    for d in (start, *start.parents):
+        if (d / WORKSPACE_MARKER).exists():
+            return d
+    return None
+
+
 def _resolve_root() -> Path:
     if "NOVEL_ROOT" in os.environ:
         return Path(os.environ["NOVEL_ROOT"]).resolve()
-    cwd = Path.cwd()
-    if (cwd / "state/progress.json").exists() or (cwd / "bible").exists() or (cwd / "outline").exists():
-        return cwd
-    if len(sys.argv) > 1 and sys.argv[1] == "init":
-        return cwd
-    return Path(__file__).resolve().parent.parent
+    argv = sys.argv[1:]
+    cmd = argv[0] if argv else ""
+    if cmd == "init":
+        positional = [x for x in argv[1:] if not x.startswith("-")]
+        return (Path(positional[0]) if positional else Path.cwd()).resolve()
+    ws = find_workspace(Path.cwd())
+    if ws:
+        return ws
+    if cmd in ROOTLESS_CMDS:
+        return Path.cwd()
+    sys.exit(f"当前目录不是小说工作区（向上没有找到 {WORKSPACE_MARKER}）。"
+             f"先在目标目录运行 `python3 {sys.argv[0]} init`，或用 NOVEL_ROOT 指定工作区。")
+
 
 ROOT = _resolve_root()
 
@@ -377,7 +407,7 @@ def last_checkpoints(chapter: int | None = None, limit: int = 8) -> list[dict]:
 def default_progress() -> dict:
     return {"phase": "init", "next_chapter": 1, "last_committed": 0, "gate": "per-arc",
             "pending_revisions": [], "arc_reviews_done": [], "volume_reviews_done": [],
-            "steer_queue": [], "updated_at": now()}
+            "steer_queue": [], "harness_version": __version__, "updated_at": now()}
 
 
 def load_progress() -> dict:
@@ -1223,12 +1253,106 @@ def sync_check() -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------- init / status
-def init_project() -> None:
+# ---------------------------------------------------------------- init / upgrade / status
+def _copy_file(src: Path, dst: Path) -> None:
+    import shutil
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+
+
+def _vendor(src_root: Path, overwrite: bool) -> list[str]:
+    """把随版本走的工具与契约复制进工作区。返回实际写入的相对路径。"""
+    done = []
+    for rel in VENDORED:
+        src, dst = src_root / rel, ROOT / rel
+        if not src.exists():
+            continue
+        if overwrite or not dst.exists():
+            _copy_file(src, dst)
+            done.append(rel)
+    return done
+
+
+def _seed_templates(src_root: Path) -> list[str]:
+    """播种模板：已存在的文件一律不动；CLAUDE.md 若已存在则只追加带标记的段落。"""
+    done = []
+    tpl = src_root / TEMPLATE_DIR
+    if not tpl.is_dir():
+        return done
+    for f in sorted(tpl.rglob("*")):
+        if not f.is_file():
+            continue
+        rel = f.relative_to(tpl)
+        dst = ROOT / rel
+        if rel.name == "CLAUDE.md":
+            block = f.read_text(encoding="utf-8")
+            marker = "<!-- novel-harness:begin -->"
+            if not dst.exists():
+                dst.write_text(block, encoding="utf-8")
+                done.append(str(rel))
+            elif marker not in dst.read_text(encoding="utf-8"):
+                with dst.open("a", encoding="utf-8") as out:
+                    out.write("\n\n" + block)
+                done.append(str(rel) + " (appended)")
+            continue
+        if not dst.exists():
+            _copy_file(f, dst)
+            done.append(str(rel))
+    return done
+
+
+def _link_or_copy(src_name: str, dst: Path) -> None:
+    if dst.exists() or dst.is_symlink():
+        return
+    try:
+        dst.symlink_to(src_name)
+    except OSError:
+        import shutil
+        shutil.copy2(dst.parent / src_name, dst)
+
+
+WORKSPACE_PERMISSIONS = ["Bash(python3 tools/novel.py:*)", "Bash(git add:*)", "Bash(git commit:*)",
+                         "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)"]
+
+
+def _write_claude_settings(standalone: bool) -> str | None:
+    """工作区级 .claude/settings.json：只在不存在时写。
+    插件模式只放权限白名单（钩子由插件提供，避免双触发）；standalone 模式连钩子一起写。"""
+    dst = ROOT / ".claude/settings.json"
+    if dst.exists():
+        return None
+    cfg: dict = {"permissions": {"allow": WORKSPACE_PERMISSIONS}}
+    if standalone:
+        cfg["hooks"] = {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [
+            {"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/tools/hooks/post_write.sh"}]}]}
+    write_json(dst, cfg)
+    return ".claude/settings.json"
+
+
+def _vendor_claude_components(src_root: Path) -> list[str]:
+    """standalone：把角色与 skill 复制到工作区 .claude/，不装插件也能用。"""
+    import shutil
+    done = []
+    for sub in ("agents", "skills"):
+        src = src_root / sub
+        if not src.is_dir():
+            continue
+        dst = ROOT / ".claude" / sub
+        if dst.exists():
+            continue
+        shutil.copytree(src, dst)
+        done.append(f".claude/{sub}/")
+    return done
+
+
+def init_project(standalone: bool = False) -> None:
+    if ROOT.resolve() == HARNESS_ROOT.resolve() and (HARNESS_ROOT / TEMPLATE_DIR).is_dir():
+        fail("这是 harness 本身的目录，不能当作小说工作区。到一个空目录（或你的小说目录）里运行 init。")
     for k in ("char_dir", "world_dir", "plans", "drafts", "final", "facts", "reviews", "sum_ch", "sum_arc", "sum_vol", "char_state_dir"):
         P[k].mkdir(parents=True, exist_ok=True)
     P["style_rules"].parent.mkdir(parents=True, exist_ok=True)
-    if not P["progress"].exists():
+    fresh = not P["progress"].exists()
+    if fresh:
         save_progress(default_progress())
     if not P["style_rules"].exists():
         write_json(P["style_rules"], DEFAULT_STYLE_RULES)
@@ -1239,22 +1363,55 @@ def init_project() -> None:
     if not P["cast"].exists():
         write_json(P["cast"], {})
     db().close()
-    plugin_root = Path(__file__).resolve().parent.parent
-    if ROOT.resolve() != plugin_root.resolve():
-        target_tools = ROOT / "tools"
-        target_tools.mkdir(parents=True, exist_ok=True)
-        import shutil
-        if not (target_tools / "novel.py").exists():
-            try:
-                (target_tools / "novel.py").symlink_to(plugin_root / "tools/novel.py")
-            except Exception:
-                shutil.copy2(plugin_root / "tools/novel.py", target_tools / "novel.py")
-        if not (target_tools / "hooks").exists() and (plugin_root / "tools/hooks").exists():
-            try:
-                (target_tools / "hooks").symlink_to(plugin_root / "tools/hooks")
-            except Exception:
-                shutil.copytree(plugin_root / "tools/hooks", target_tools / "hooks")
-    print(f"initialized novel workspace at {ROOT}")
+
+    written = _seed_templates(HARNESS_ROOT)
+    written += _vendor(HARNESS_ROOT, overwrite=False)
+    if (ROOT / "CLAUDE.md").exists():
+        _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")
+    if standalone:
+        written += _vendor_claude_components(HARNESS_ROOT)
+    settings = _write_claude_settings(standalone)
+    if settings:
+        written.append(settings)
+    if standalone and not settings:
+        print("提示：.claude/settings.json 已存在，未写入钩子；standalone 模式请手动加入 tools/hooks/post_write.sh 的 PostToolUse 钩子。")
+
+    print(f"initialized novel workspace at {ROOT} (novel-harness {__version__}, {'新建' if fresh else '已存在，幂等'})")
+    for rel in written:
+        print(f"  + {rel}")
+    if not (ROOT / ".git").exists() and find_git_root(ROOT) is None:
+        print("提示：工作区还不是 git 仓库；每章提交依赖 git，建议先 `git init`。")
+
+
+def find_git_root(start: Path) -> Path | None:
+    for d in (start, *start.parents):
+        if (d / ".git").exists():
+            return d
+    return None
+
+
+def upgrade_workspace(src: str | None) -> None:
+    """从 harness（插件目录）刷新工作区里随版本走的文件。模板与用户文件不动。"""
+    if src:
+        src_root = Path(src).resolve()
+    elif HARNESS_ROOT.resolve() != ROOT.resolve():
+        src_root = HARNESS_ROOT
+    elif os.environ.get("CLAUDE_PLUGIN_ROOT"):
+        src_root = Path(os.environ["CLAUDE_PLUGIN_ROOT"]).resolve()
+    else:
+        fail("不知道从哪里升级：用插件目录下的 novel.py 运行（python3 <插件目录>/tools/novel.py upgrade），或加 --from <插件目录>")
+    if not (src_root / "tools/novel.py").exists():
+        fail(f"{src_root} 不是 novel-harness 目录（缺 tools/novel.py）")
+    src_ver = re.search(r'^__version__ = "([^"]+)"', (src_root / "tools/novel.py").read_text(encoding="utf-8"), re.M)
+    new_ver = src_ver.group(1) if src_ver else "unknown"
+    p = load_progress()
+    old_ver = p.get("harness_version", "unknown")
+    done = _vendor(src_root, overwrite=True)
+    p["harness_version"] = new_ver
+    save_progress(p)
+    print(f"upgraded {ROOT}: {old_ver} -> {new_ver}")
+    for rel in done:
+        print(f"  ~ {rel}")
 
 
 def status() -> dict:
@@ -1263,6 +1420,7 @@ def status() -> dict:
     rules = style_rules()
     tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
     return {"progress": p, "route": r, "foundation_missing": foundation_missing(),
+            "harness": {"version": __version__, "root": str(ROOT)},
             "recent_steps": last_checkpoints(limit=5),
             "threads": {"active": sum(t["status"] == "active" for t in tv), "stale": [t["id"] for t in tv if t["stale"]],
                         "overdue": [t["id"] for t in tv if t["payoff_overdue"]]},
@@ -1288,7 +1446,12 @@ def recall(entity: str, before: int | None) -> dict:
 def main(argv: list[str]) -> None:
     ap = argparse.ArgumentParser(prog="novel.py", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("init", help="初始化状态文件与索引（幂等）")
+    s = sub.add_parser("init", help="在目录里建立小说工作区：目录骨架、状态、模板、随版本走的工具与契约（幂等）")
+    s.add_argument("dir", nargs="?", help="目标目录，默认当前目录")
+    s.add_argument("--standalone", action="store_true", help="不装插件也能用：把角色与 skill 复制到工作区 .claude/ 并写入钩子")
+    s = sub.add_parser("upgrade", help="从插件目录刷新工作区里的 novel.py / 钩子 / 数据契约")
+    s.add_argument("--from", dest="src", help="harness 目录；缺省用当前运行的 novel.py 所在 harness 或 $CLAUDE_PLUGIN_ROOT")
+    sub.add_parser("version", help="打印 harness 版本")
     sub.add_parser("status", help="进度 + 确定性路由（下一步该做什么）")
     s = sub.add_parser("context", help="装配第 N 章的上下文包（Markdown）")
     s.add_argument("chapter", type=int)
@@ -1348,7 +1511,11 @@ def main(argv: list[str]) -> None:
     a = ap.parse_args(argv)
 
     if a.cmd == "init":
-        init_project()
+        init_project(a.standalone)
+    elif a.cmd == "upgrade":
+        upgrade_workspace(a.src)
+    elif a.cmd == "version":
+        print(__version__)
     elif a.cmd == "status":
         print(json.dumps(status(), ensure_ascii=False, indent=2))
     elif a.cmd == "context":
