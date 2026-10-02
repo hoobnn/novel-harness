@@ -49,7 +49,15 @@ def _resolve_root() -> Path:
     argv = sys.argv[1:]
     cmd = argv[0] if argv else ""
     if cmd == "init":
-        positional = [x for x in argv[1:] if not x.startswith("-")]
+        positional, skip = [], False
+        for x in argv[1:]:
+            if skip:
+                skip = False
+                continue
+            if x.startswith("-"):
+                skip = x in ("--runtime",)       # 带值的选项，跳过它的值
+                continue
+            positional.append(x)
         return (Path(positional[0]) if positional else Path.cwd()).resolve()
     ws = find_workspace(Path.cwd())
     if ws:
@@ -1314,42 +1322,24 @@ def _link_or_copy(src_name: str, dst: Path) -> None:
 WORKSPACE_PERMISSIONS = ["Bash(python3 tools/novel.py:*)", "Bash(git add:*)", "Bash(git commit:*)",
                          "Bash(git status:*)", "Bash(git log:*)", "Bash(git diff:*)"]
 
-
-def _write_claude_settings(standalone: bool) -> str | None:
-    """工作区级 .claude/settings.json：只在不存在时写。
-    插件模式只放权限白名单（钩子由插件提供，避免双触发）；standalone 模式连钩子一起写。"""
-    dst = ROOT / ".claude/settings.json"
-    if dst.exists():
-        return None
-    cfg: dict = {"permissions": {"allow": WORKSPACE_PERMISSIONS}}
-    if standalone:
-        cfg["hooks"] = {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [
-            {"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/tools/hooks/post_write.sh"}]}]}
-    write_json(dst, cfg)
-    return ".claude/settings.json"
-
-
-def _vendor_claude_components(src_root: Path) -> list[str]:
-    """standalone：把角色与 skill 复制到工作区 .claude/，不装插件也能用。"""
-    import shutil
-    done = []
-    for sub in ("agents", "skills"):
-        src = src_root / sub
-        if not src.is_dir():
-            continue
-        dst = ROOT / ".claude" / sub
-        if dst.exists():
-            continue
-        shutil.copytree(src, dst)
-        done.append(f".claude/{sub}/")
-    return done
+# ---------------------------------------------------------------- 运行时适配（standalone 模式）
+# 角色只维护一份源：agents/<role>.md（Claude Code 格式）。standalone 初始化按运行时生成各自的子智能体定义，
+# 规则来自各家官方文档（见 docs/runtimes.md）：
+#   claude       .claude/agents/<role>.md        原样复制；Cursor 也直接读这个目录
+#   codex        .codex/agents/<role>.toml       name / description / sandbox_mode / developer_instructions
+#   opencode     .opencode/agents/<role>.md      description + mode: subagent (+ permission.edit: deny)
+#   antigravity  .agents/agents/<role>.md        name / description / model: inherit|flash / subagent: true
+#   pi           .pi/agents/<role>.md            name / description / tools（subagent 扩展，agentScope 需含 project）
+#   cursor       不生成文件：原生读取 .claude/agents/、.agents/skills/、AGENTS.md，并合并 .claude/settings.json 钩子
+RUNTIMES = ["claude", "cursor", "codex", "opencode", "antigravity", "pi"]
+SKILLS_DIR_FOR = {"claude": ".claude/skills", "cursor": ".agents/skills", "codex": ".agents/skills",
+                  "opencode": ".agents/skills", "antigravity": ".agents/skills", "pi": ".agents/skills"}
+AGENT_DIR_FOR = {"claude": ".claude/agents", "codex": ".codex/agents", "opencode": ".opencode/agents",
+                 "antigravity": ".agents/agents", "pi": ".pi/agents"}
 
 
-CODEX_SANDBOX = {"checker": "read-only", "judge": "read-only"}   # 其余角色要写工作区文件
-
-
-def _parse_agent_md(path: Path) -> tuple[dict, str]:
-    """读角色 markdown：frontmatter（name/description/...）与正文。"""
+def _parse_agent_md(path: Path) -> tuple[dict, str, str]:
+    """读角色 markdown：frontmatter 字典、正文、原文。"""
     text = path.read_text(encoding="utf-8")
     meta: dict = {}
     body = text
@@ -1361,41 +1351,128 @@ def _parse_agent_md(path: Path) -> tuple[dict, str]:
                     k, v = line.split(":", 1)
                     meta[k.strip()] = v.strip()
             body = text[end + 4:].lstrip("\n")
-    return meta, body
+    return meta, body, text
+
+
+def _role_can_write(meta: dict) -> bool:
+    tools = {t.strip() for t in meta.get("tools", "").split(",")}
+    return bool(tools & {"Write", "Edit"})
 
 
 def _toml_str(v: str) -> str:
     return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
 
-def _vendor_codex_agents(src_root: Path, overwrite: bool = False) -> list[str]:
-    """把 agents/*.md 转成 Codex 子智能体定义 .codex/agents/<role>.toml。
-    Codex 按 name 字段识别；model 不写（模型名不通用，沿用会话默认）；只读角色给 read-only 沙箱。"""
-    src = src_root / "agents"
-    if not src.is_dir():
-        return []
-    dst_dir = ROOT / ".codex/agents"
-    done = []
-    for f in sorted(src.glob("*.md")):
-        meta, body = _parse_agent_md(f)
-        name = meta.get("name") or f.stem
-        dst = dst_dir / f"{name}.toml"
-        if dst.exists() and not overwrite:
-            continue
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        body = body.replace('"""', "'''")   # 正文里不能出现 TOML 多行字符串的结束符
-        tq = chr(34) * 3   # TOML 多行字符串定界符
-        toml = (f"# 由 novel-harness 从 agents/{f.name} 生成；改角色请改源文件后 novel.py upgrade\n"
+def _yaml_str(v: str) -> str:
+    return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def render_agent(runtime: str, src: Path) -> tuple[str, str] | None:
+    """把一份角色源文件渲染成某运行时的定义。返回 (工作区相对路径, 内容)；该运行时不需要文件则返回 None。"""
+    meta, body, raw = _parse_agent_md(src)
+    name = meta.get("name") or src.stem
+    desc = meta.get("description", "")
+    can_write = _role_can_write(meta)
+    cheap = meta.get("model") == "sonnet"     # 源里用 sonnet 标记「抽取/核对类，可用便宜模型」
+    header = f"由 novel-harness 从 agents/{src.name} 生成；改角色请改源文件后 novel.py upgrade"
+    if runtime == "claude":
+        return f".claude/agents/{name}.md", raw
+    if runtime == "codex":
+        tq = chr(34) * 3
+        body = body.replace(tq, "'" * 3)
+        return (f".codex/agents/{name}.toml",
+                f"# {header}\n"
                 f"name = {_toml_str(name)}\n"
-                f"description = {_toml_str(meta.get('description', ''))}\n"
-                f"sandbox_mode = {_toml_str(CODEX_SANDBOX.get(name, 'workspace-write'))}\n"
-                "developer_instructions = " + tq + "\n" + body.rstrip() + "\n" + tq + "\n")
-        dst.write_text(toml, encoding="utf-8")
-        done.append(f".codex/agents/{name}.toml")
+                f"description = {_toml_str(desc)}\n"
+                f"sandbox_mode = {_toml_str('workspace-write' if can_write else 'read-only')}\n"
+                f"developer_instructions = {tq}\n{body.rstrip()}\n{tq}\n")
+    if runtime == "opencode":
+        fm = [f"description: {_yaml_str(desc)}", "mode: subagent"]
+        if not can_write:
+            fm += ["permission:", "  edit: deny"]
+        return f".opencode/agents/{name}.md", "---\n" + "\n".join(fm) + f"\n---\n<!-- {header} -->\n\n{body}"
+    if runtime == "antigravity":
+        fm = [f"name: {name}", f"description: {_yaml_str(desc)}",
+              f"model: {'flash' if cheap else 'inherit'}", "subagent: true", "mainAgent: false"]
+        return f".agents/agents/{name}.md", "---\n" + "\n".join(fm) + f"\n---\n<!-- {header} -->\n\n{body}"
+    if runtime == "pi":
+        tools = "read, bash, edit, write, grep, find, ls" if can_write else "read, bash, grep, find, ls"
+        fm = [f"name: {name}", f"description: {_yaml_str(desc)}", f"tools: {tools}"]
+        return f".pi/agents/{name}.md", "---\n" + "\n".join(fm) + f"\n---\n<!-- {header} -->\n\n{body}"
+    return None
+
+
+def _vendor_agents(src_root: Path, runtimes: list[str], overwrite: bool) -> list[str]:
+    done = []
+    for rt in runtimes:
+        if rt not in AGENT_DIR_FOR:
+            continue
+        for f in sorted((src_root / "agents").glob("*.md")):
+            rendered = render_agent(rt, f)
+            if not rendered:
+                continue
+            rel, text = rendered
+            dst = ROOT / rel
+            if dst.exists() and not overwrite:
+                continue
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_text(text, encoding="utf-8")
+            done.append(rel)
     return done
 
 
-def init_project(standalone: bool = False) -> None:
+def _vendor_skills(src_root: Path, runtimes: list[str], overwrite: bool) -> list[str]:
+    """skill 原样复制；npx skills 托管的工作区（有 skills-lock.json）不碰。"""
+    import shutil
+    if (ROOT / "skills-lock.json").exists() or not (src_root / "skills").is_dir():
+        return []
+    done = []
+    for target in sorted({SKILLS_DIR_FOR[rt] for rt in runtimes if rt in SKILLS_DIR_FOR}):
+        dst_root = ROOT / target
+        for d in sorted((src_root / "skills").iterdir()):
+            if not d.is_dir():
+                continue
+            dst = dst_root / d.name
+            if dst.exists() and not overwrite:
+                continue
+            shutil.copytree(d, dst, dirs_exist_ok=True)
+        done.append(target + "/")
+    return done
+
+
+def _write_claude_settings(with_hook: bool) -> str | None:
+    """工作区级 .claude/settings.json：只在不存在时写。
+    插件模式只放权限白名单（钩子由插件提供，避免双触发）；standalone 模式连钩子一起写（Cursor 也会合并这里的钩子）。"""
+    dst = ROOT / ".claude/settings.json"
+    if dst.exists():
+        return None
+    cfg: dict = {"permissions": {"allow": WORKSPACE_PERMISSIONS}}
+    if with_hook:
+        cfg["hooks"] = {"PostToolUse": [{"matcher": "Write|Edit", "hooks": [
+            {"type": "command", "command": "bash \"$CLAUDE_PROJECT_DIR\"/tools/hooks/post_write.sh"}]}]}
+    write_json(dst, cfg)
+    return ".claude/settings.json"
+
+
+def _parse_runtimes(spec: str | None) -> list[str]:
+    if not spec or spec == "all":
+        return list(RUNTIMES)
+    chosen = [x.strip() for x in spec.split(",") if x.strip()]
+    bad = [x for x in chosen if x not in RUNTIMES]
+    if bad:
+        fail(f"未知运行时 {bad}；可选：{', '.join(RUNTIMES)}")
+    return chosen
+
+
+def _detect_runtimes() -> list[str]:
+    """旧工作区没记录 standalone_runtimes 时，按已存在的目录推断。"""
+    found = [rt for rt, d in AGENT_DIR_FOR.items() if (ROOT / d).is_dir()]
+    if (ROOT / ".claude/agents").is_dir() and "cursor" not in found:
+        found.append("cursor")
+    return found
+
+
+def init_project(standalone: bool = False, runtimes: str | None = None) -> None:
     if ROOT.resolve() == HARNESS_ROOT.resolve() and (HARNESS_ROOT / TEMPLATE_DIR).is_dir():
         fail("这是 harness 本身的目录，不能当作小说工作区。到一个空目录（或你的小说目录）里运行 init。")
     for k in ("char_dir", "world_dir", "plans", "drafts", "final", "facts", "reviews", "sum_ch", "sum_arc", "sum_vol", "char_state_dir"):
@@ -1417,17 +1494,24 @@ def init_project(standalone: bool = False) -> None:
     written = _seed_templates(HARNESS_ROOT)
     written += _vendor(HARNESS_ROOT, overwrite=False)
     if (ROOT / "CLAUDE.md").exists():
-        _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")
+        _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")   # Codex / OpenCode / Antigravity / Pi / Cursor 都读 AGENTS.md
+    chosen: list[str] = []
     if standalone:
-        written += _vendor_claude_components(HARNESS_ROOT)
-        written += _vendor_codex_agents(HARNESS_ROOT)
-    settings = _write_claude_settings(standalone)
+        chosen = _parse_runtimes(runtimes)
+        written += _vendor_agents(HARNESS_ROOT, chosen, overwrite=False)
+        written += _vendor_skills(HARNESS_ROOT, chosen, overwrite=False)
+        p = load_progress()
+        p["standalone_runtimes"] = chosen
+        save_progress(p)
+    with_hook = standalone and bool({"claude", "cursor"} & set(chosen))
+    settings = _write_claude_settings(with_hook)
     if settings:
         written.append(settings)
-    if standalone and not settings:
-        print("提示：.claude/settings.json 已存在，未写入钩子；standalone 模式请手动加入 tools/hooks/post_write.sh 的 PostToolUse 钩子。")
+    if with_hook and not settings:
+        print("提示：.claude/settings.json 已存在，未写入钩子；请手动加入 tools/hooks/post_write.sh 的 PostToolUse 钩子。")
 
-    print(f"initialized novel workspace at {ROOT} (novel-harness {__version__}, {'新建' if fresh else '已存在，幂等'})")
+    mode = f"standalone: {', '.join(chosen)}" if standalone else "plugin"
+    print(f"initialized novel workspace at {ROOT} (novel-harness {__version__}, {'新建' if fresh else '已存在，幂等'}, {mode})")
     for rel in written:
         print(f"  + {rel}")
     if not (ROOT / ".git").exists() and find_git_root(ROOT) is None:
@@ -1458,22 +1542,13 @@ def harness_cache() -> Path | None:
 
 
 def _refresh_standalone_components(src_root: Path) -> list[str]:
-    """standalone 工作区：刷新复制进 .claude/ 的角色；skill 只在不是 npx skills 托管时刷新。"""
-    import shutil
-    done = []
-    agents = ROOT / ".claude/agents"
-    if agents.is_dir() and (src_root / "agents").is_dir():
-        for f in (src_root / "agents").glob("*.md"):
-            shutil.copy2(f, agents / f.name)
-        done.append(".claude/agents/")
-    skills = ROOT / ".claude/skills"
-    if (skills / "novel-next/SKILL.md").exists() and not (ROOT / "skills-lock.json").exists() and (src_root / "skills").is_dir():
-        for d in (src_root / "skills").iterdir():
-            if d.is_dir():
-                shutil.copytree(d, skills / d.name, dirs_exist_ok=True)
-        done.append(".claude/skills/")
-    if (ROOT / ".codex/agents").is_dir() or agents.is_dir():   # standalone 工作区：旧版本没生成过也补上
-        done += _vendor_codex_agents(src_root, overwrite=True)
+    """standalone 工作区：按记录（或推断）的运行时重新生成角色与 skill；npx skills 托管的 skill 不碰。"""
+    p = load_progress()
+    runtimes = p.get("standalone_runtimes") or _detect_runtimes()
+    if not runtimes:
+        return []
+    done = _vendor_agents(src_root, runtimes, overwrite=True)
+    done += _vendor_skills(src_root, runtimes, overwrite=True)
     return done
 
 
@@ -1539,7 +1614,8 @@ def main(argv: list[str]) -> None:
     sub = ap.add_subparsers(dest="cmd", required=True)
     s = sub.add_parser("init", help="在目录里建立小说工作区：目录骨架、状态、模板、随版本走的工具与契约（幂等）")
     s.add_argument("dir", nargs="?", help="目标目录，默认当前目录")
-    s.add_argument("--standalone", action="store_true", help="不装插件也能用：把角色与 skill 复制到工作区 .claude/ 并写入钩子")
+    s.add_argument("--standalone", action="store_true", help="不装插件也能用：在工作区生成各运行时的角色定义与 skill，并写入钩子")
+    s.add_argument("--runtime", help="standalone 生成哪些运行时的文件，逗号分隔；默认 all。可选：" + ", ".join(RUNTIMES))
     s = sub.add_parser("upgrade", help="从插件目录刷新工作区里的 novel.py / 钩子 / 数据契约")
     s.add_argument("--from", dest="src", help="harness 目录；缺省用当前运行的 novel.py 所在 harness 或 $CLAUDE_PLUGIN_ROOT")
     sub.add_parser("version", help="打印 harness 版本")
@@ -1602,7 +1678,7 @@ def main(argv: list[str]) -> None:
     a = ap.parse_args(argv)
 
     if a.cmd == "init":
-        init_project(a.standalone)
+        init_project(a.standalone, a.runtime)
     elif a.cmd == "upgrade":
         upgrade_workspace(a.src)
     elif a.cmd == "version":

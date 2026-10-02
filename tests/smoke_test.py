@@ -99,23 +99,46 @@ def main() -> None:
         r = run(sys.executable, "tools/novel.py", "upgrade", cwd=ws)
         check(r.returncode != 0 and "不知道从哪里升级" in r.stderr, "工作区自身的 novel.py 无来源时拒绝 upgrade")
 
-        # 5. standalone
+        # 5. standalone：按运行时生成角色与 skill
         ws3 = tmp / "standalone"
         ws3.mkdir()
         r = run(sys.executable, str(NOVEL), "init", "--standalone", cwd=ws3)
-        check(r.returncode == 0 and (ws3 / ".claude/agents/writer.md").exists() and (ws3 / ".claude/skills/novel-next/SKILL.md").exists(), "standalone 复制角色与 skill")
+        check(r.returncode == 0 and (ws3 / ".claude/agents/writer.md").exists() and (ws3 / ".claude/skills/novel-next/SKILL.md").exists(), "standalone 复制 Claude 角色与 skill")
+        check((ws3 / ".agents/skills/novel-next/SKILL.md").exists(), "standalone 把 skill 也放进 .agents/skills/（Cursor / Codex / OpenCode / Antigravity / Pi 共用）")
         settings = json.loads((ws3 / ".claude/settings.json").read_text())
-        check("PostToolUse" in settings.get("hooks", {}), "standalone 写入钩子")
-        codex = ws3 / ".codex/agents"
-        check(len(list(codex.glob("*.toml"))) == len(list((HARNESS / "agents").glob("*.md"))), "standalone 生成 Codex 子智能体 .codex/agents/*.toml")
+        check("PostToolUse" in settings.get("hooks", {}), "standalone 写入钩子（Cursor 会合并同一份）")
+        n_roles = len(list((HARNESS / "agents").glob("*.md")))
+        for rt_dir in (".codex/agents", ".opencode/agents", ".agents/agents", ".pi/agents"):
+            check(len(list((ws3 / rt_dir).iterdir())) == n_roles, f"standalone 生成 {rt_dir}/ 全部 {n_roles} 个角色")
+        prog = json.loads((ws3 / "state/progress.json").read_text())
+        check(prog.get("standalone_runtimes") == ["claude", "cursor", "codex", "opencode", "antigravity", "pi"], "progress 记录 standalone_runtimes")
         try:
             import tomllib
-            w = tomllib.loads((codex / "writer.toml").read_text(encoding="utf-8"))
-            c = tomllib.loads((codex / "checker.toml").read_text(encoding="utf-8"))
+            w = tomllib.loads((ws3 / ".codex/agents/writer.toml").read_text(encoding="utf-8"))
+            j = tomllib.loads((ws3 / ".codex/agents/judge.toml").read_text(encoding="utf-8"))
             check(w["name"] == "writer" and w["sandbox_mode"] == "workspace-write" and "你是写手" in w["developer_instructions"]
-                  and c["sandbox_mode"] == "read-only", "Codex TOML 可解析：name / sandbox_mode / developer_instructions")
+                  and j["sandbox_mode"] == "read-only", "Codex TOML 可解析：name / sandbox_mode / developer_instructions")
         except ModuleNotFoundError:
             print("skip tomllib (<3.11)")
+        oc_judge = (ws3 / ".opencode/agents/judge.md").read_text(encoding="utf-8")
+        oc_writer = (ws3 / ".opencode/agents/writer.md").read_text(encoding="utf-8")
+        check(oc_judge.startswith("---\ndescription: ") and "mode: subagent" in oc_judge and "edit: deny" in oc_judge and "edit: deny" not in oc_writer,
+              "OpenCode frontmatter：description / mode: subagent，只读角色 permission.edit: deny")
+        ag_ledger = (ws3 / ".agents/agents/ledger.md").read_text(encoding="utf-8")
+        ag_writer = (ws3 / ".agents/agents/writer.md").read_text(encoding="utf-8")
+        check("name: ledger" in ag_ledger and "model: flash" in ag_ledger and "model: inherit" in ag_writer and "subagent: true" in ag_writer,
+              "Antigravity frontmatter：model 映射 sonnet→flash / inherit，subagent: true")
+        pi_judge = (ws3 / ".pi/agents/judge.md").read_text(encoding="utf-8")
+        check("tools: read, bash, grep, find, ls" in pi_judge and "write" not in pi_judge.split("---")[1], "Pi frontmatter：只读角色不给 write/edit 工具")
+        ws3b = tmp / "standalone-claude-only"
+        ws3b.mkdir()
+        r = run(sys.executable, str(NOVEL), "init", "--standalone", "--runtime", "claude", cwd=ws3b)
+        check(r.returncode == 0 and (ws3b / ".claude/agents").is_dir() and not (ws3b / ".codex").exists() and not (ws3b / ".agents").exists(),
+              "--runtime claude 只生成 Claude 的文件")
+        (tmp / "x").mkdir()
+        r = run(sys.executable, str(NOVEL), "init", "--standalone", "--runtime", "nope", cwd=tmp / "x")
+        check(r.returncode != 0 and "未知运行时" in r.stderr, "--runtime 非法值报错")
+
         # 6. 只装了 skill（npx skills）：init.sh 找不到插件，回退到本地缓存并 --standalone
         ws4 = tmp / "skills-only"
         (ws4 / ".claude/skills").mkdir(parents=True)
@@ -140,8 +163,9 @@ def main() -> None:
             shutil.copy2(HARNESS / "tools/novel.py", dst)
         (ws5 / "docs/protocol.md").write_text("stale", encoding="utf-8")
         r = run(sys.executable, "tools/novel.py", "upgrade", cwd=ws5, env={"XDG_CACHE_HOME": str(cache_home)})
-        check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/" in r.stdout
-              and ".codex/agents/writer.toml" in r.stdout, "工作区自身的 novel.py 能从缓存 upgrade 并刷新 Claude 与 Codex 角色")
+        check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/writer.md" in r.stdout
+              and ".codex/agents/writer.toml" in r.stdout,
+              "工作区自身的 novel.py 能从缓存 upgrade 并按已有运行时目录重新生成角色")
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

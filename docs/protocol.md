@@ -2,7 +2,7 @@
 
 主会话（你）是**确定性引擎**：读事实、查路由、派发子智能体、校验产物、推进状态。你自己不写正文、不做文学判断、不手改账本。所有需要判断力的工作都派给七个角色（architect / planner / writer / checker / editor / ledger / judge），所有能用代码判定的事情都交给工作区里的 `tools/novel.py`。
 
-角色名：Claude Code 以插件方式安装时带前缀，如 `novel-harness:writer`；standalone 模式（角色复制在工作区 `.claude/agents/`）或 Antigravity 下用裸名 `writer`。下文路由表统一写裸名。
+角色名：Claude Code 以插件方式安装时带前缀，如 `novel-harness:writer`；其他运行时（standalone 生成的定义）用裸名 `writer`。下文路由表统一写裸名。
 
 数据契约唯一口径：`docs/schemas.md`。改任何文件格式前先读它。本文件与 `docs/schemas.md`、`tools/novel.py` 同版本分发，`python3 tools/novel.py upgrade` 一起刷新。
 
@@ -65,9 +65,13 @@
 
 ## 子智能体派发与运行环境
 
-- **Claude Code**：用 Agent 工具直接派发角色（插件模式 `novel-harness:<role>`，standalone 模式 `<role>`）。
-- **Antigravity (AGY)**：首次派发某角色前，从插件目录 `agents/<role>.md` 读取其提示词，调用 `define_subagent` 注册子智能体；随后调用 `invoke_subagent` 派发。`checker+editor` 在一次 `invoke_subagent` 调用中传入两项配置以并行执行。
-- **Codex**：standalone 初始化会把七个角色生成为 `.codex/agents/<role>.toml`（Codex 按 `name` 字段识别自定义子智能体，checker / judge 为只读沙箱）。派发时在指令里点名角色，例如「让 planner 规划第 N 章」；`checker+editor` 在同一条指令里点名两个角色即并行。Codex 从 `.agents/skills/` 读 skill，用 `$novel-next` 这类写法显式调用。
+角色定义由 `novel.py init --standalone` 按运行时生成（Claude Code 插件模式除外），各家的目录、字段与派发写法见 `docs/runtimes.md`。要点：
+- **Claude Code**：Agent 工具派发，插件模式 `novel-harness:<role>`，standalone 模式 `<role>`。
+- **Cursor**：原生读取 `.claude/agents/`，`/writer` 或自然语言点名，一条消息里多次派发即并行。
+- **Codex**：`.codex/agents/<role>.toml`，指令里点名角色即派发，`checker+editor` 在同一条指令里点名两个角色即并行。
+- **OpenCode**：`.opencode/agents/<role>.md`，`@writer` 点名或按描述自动派发。
+- **Antigravity**：`.agents/agents/<role>.md`，`invoke_subagent` 的 `TypeName` 填角色名，一次传多个 spec 即并行。
+- **Pi**：需装官方示例扩展 `subagent` 并把 `agentScope` 设为 `project`，读 `.pi/agents/<role>.md`；用自然语言点名。
 - **没有子智能体机制的运行时**：由主会话按角色文件逐个扮演，但产物、校验与状态推进规则不变。
 
 ## 常用命令

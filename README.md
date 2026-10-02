@@ -1,6 +1,6 @@
 # novel-harness
 
-> 在 Claude Code 与 Google Antigravity 里跑的长篇小说创作 Agent 团队，以插件形式分发。
+> 长篇小说创作 Agent 团队。Claude Code 插件一键安装；Cursor、Codex、OpenCode、Antigravity、Pi 经 `npx skills` 安装。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
@@ -56,22 +56,25 @@ npx skills add hoobnn/novel-harness
 ```
 
 它只会装 6 个 skill。第一次运行 `novel-init` 时，`init.sh` 发现自己不在插件目录里，会把本仓库浅克隆到
-`~/.cache/novel-harness/src`，再以 standalone 模式初始化：七个角色复制进工作区 `.claude/agents/`
-（Claude Code 子智能体）并生成 `.codex/agents/*.toml`（Codex 子智能体），钩子写进 `.claude/settings.json`。
-之后 `python3 tools/novel.py upgrade` 会从这个缓存刷新。可用 `NOVEL_HARNESS_SRC` 指向现成的仓库目录跳过克隆。
+`~/.cache/novel-harness/src`，再以 standalone 模式初始化：按运行时生成七个角色的子智能体定义、复制 skill、
+写入钩子。之后 `python3 tools/novel.py upgrade` 会从这个缓存刷新。可用 `NOVEL_HARNESS_SRC` 指向现成的仓库目录跳过克隆；
+`--runtime cursor,codex` 这类参数只生成指定运行时的文件。
 
-| 运行时 | skill 入口 | 子智能体 |
-|---|---|---|
-| Claude Code 插件 | `/novel-harness:novel-next` | 插件自带，`novel-harness:writer` |
-| Claude Code + npx skills | `/novel-next` | 工作区 `.claude/agents/` |
-| Codex | `$novel-next` | 工作区 `.codex/agents/*.toml`，指令里点名角色即可派发 |
-| 没有子智能体机制的 agent | 各自的 skill 语法 | 主会话按角色文件逐个扮演，连续性校验仍由 `novel.py` 保证 |
+| 运行时 | skill 入口 | 子智能体定义（standalone 生成） | 派发写法 |
+|---|---|---|---|
+| Claude Code 插件 | `/novel-harness:novel-next` | 插件自带 | Agent 工具，`novel-harness:writer` |
+| Claude Code standalone | `/novel-next` | `.claude/agents/*.md` | Agent 工具，`writer` |
+| Cursor | `/novel-next` | 原生读取 `.claude/agents/` | `/writer` 或自然语言点名 |
+| Codex | `$novel-next` | `.codex/agents/*.toml` | 指令里点名角色 |
+| OpenCode | `skill` 工具 | `.opencode/agents/*.md` | `@writer` |
+| Antigravity | `/novel-next` | `.agents/agents/*.md` | `invoke_subagent` |
+| Pi | `/skill:novel-next` | `.pi/agents/*.md`（需装官方 subagent 扩展） | 自然语言点名 |
+
+各运行时的目录、字段映射、核实来源与未实测项见 [`docs/runtimes.md`](docs/runtimes.md)。
 
 **不装插件**：在小说目录里 `python3 /path/to/novel-harness/tools/novel.py init --standalone`，
 角色与 skill 会复制到该目录的 `.claude/` 下，slash 命令去掉 `novel-harness:` 前缀。
 
-**Antigravity**：按 Antigravity 的插件方式加载本仓库（`plugin.json` / `hooks.json` / `rules/` / `.agents/`），
-派发契约见 [`.agents/rules/antigravity.md`](.agents/rules/antigravity.md)。
 
 ## 快速开始
 
