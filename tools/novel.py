@@ -1390,16 +1390,53 @@ def find_git_root(start: Path) -> Path | None:
     return None
 
 
+def harness_cache() -> Path | None:
+    """skill 单独安装（npx skills 等）时 init.sh 克隆的本地缓存；能刷新就顺手刷新。"""
+    env = os.environ.get("NOVEL_HARNESS_SRC")
+    cache = Path(env).resolve() if env else Path(os.environ.get("XDG_CACHE_HOME") or Path.home() / ".cache") / "novel-harness/src"
+    if not (cache / "tools/novel.py").exists():
+        return None
+    if not env and (cache / ".git").exists():
+        import subprocess
+        try:
+            subprocess.run(["git", "-C", str(cache), "pull", "--ff-only", "-q"], timeout=30,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            pass
+    return cache
+
+
+def _refresh_standalone_components(src_root: Path) -> list[str]:
+    """standalone 工作区：刷新复制进 .claude/ 的角色；skill 只在不是 npx skills 托管时刷新。"""
+    import shutil
+    done = []
+    agents = ROOT / ".claude/agents"
+    if agents.is_dir() and (src_root / "agents").is_dir():
+        for f in (src_root / "agents").glob("*.md"):
+            shutil.copy2(f, agents / f.name)
+        done.append(".claude/agents/")
+    skills = ROOT / ".claude/skills"
+    if (skills / "novel-next/SKILL.md").exists() and not (ROOT / "skills-lock.json").exists() and (src_root / "skills").is_dir():
+        for d in (src_root / "skills").iterdir():
+            if d.is_dir():
+                shutil.copytree(d, skills / d.name, dirs_exist_ok=True)
+        done.append(".claude/skills/")
+    return done
+
+
 def upgrade_workspace(src: str | None) -> None:
-    """从 harness（插件目录）刷新工作区里随版本走的文件。模板与用户文件不动。"""
+    """从 harness（插件目录或本地缓存）刷新工作区里随版本走的文件。模板与用户文件不动。"""
     if src:
         src_root = Path(src).resolve()
     elif HARNESS_ROOT.resolve() != ROOT.resolve():
         src_root = HARNESS_ROOT
     elif os.environ.get("CLAUDE_PLUGIN_ROOT"):
         src_root = Path(os.environ["CLAUDE_PLUGIN_ROOT"]).resolve()
+    elif harness_cache():
+        src_root = harness_cache()  # type: ignore[assignment]
     else:
-        fail("不知道从哪里升级：用插件目录下的 novel.py 运行（python3 <插件目录>/tools/novel.py upgrade），或加 --from <插件目录>")
+        fail("不知道从哪里升级：用插件目录下的 novel.py 运行（python3 <插件目录>/tools/novel.py upgrade），"
+             "加 --from <harness 目录>，或设置 NOVEL_HARNESS_SRC")
     if not (src_root / "tools/novel.py").exists():
         fail(f"{src_root} 不是 novel-harness 目录（缺 tools/novel.py）")
     src_ver = re.search(r'^__version__ = "([^"]+)"', (src_root / "tools/novel.py").read_text(encoding="utf-8"), re.M)
@@ -1407,6 +1444,7 @@ def upgrade_workspace(src: str | None) -> None:
     p = load_progress()
     old_ver = p.get("harness_version", "unknown")
     done = _vendor(src_root, overwrite=True)
+    done += _refresh_standalone_components(src_root)
     p["harness_version"] = new_ver
     save_progress(p)
     print(f"upgraded {ROOT}: {old_ver} -> {new_ver}")

@@ -106,6 +106,32 @@ def main() -> None:
         check(r.returncode == 0 and (ws3 / ".claude/agents/writer.md").exists() and (ws3 / ".claude/skills/novel-next/SKILL.md").exists(), "standalone 复制角色与 skill")
         settings = json.loads((ws3 / ".claude/settings.json").read_text())
         check("PostToolUse" in settings.get("hooks", {}), "standalone 写入钩子")
+        # 6. 只装了 skill（npx skills）：init.sh 找不到插件，回退到本地缓存并 --standalone
+        ws4 = tmp / "skills-only"
+        (ws4 / ".claude/skills").mkdir(parents=True)
+        shutil.copytree(HARNESS / "skills/novel-init", ws4 / ".claude/skills/novel-init")
+        (ws4 / "skills-lock.json").write_text("{}", encoding="utf-8")   # npx skills 的痕迹
+        init_sh = ws4 / ".claude/skills/novel-init/scripts/init.sh"
+        r = run("bash", str(init_sh), cwd=ws4, env={"NOVEL_HARNESS_SRC": str(HARNESS)})
+        check(r.returncode == 0 and (ws4 / ".claude/agents/writer.md").exists() and (ws4 / "tools/novel.py").exists(),
+              "skill 单独安装：NOVEL_HARNESS_SRC 指定来源，standalone 初始化带上角色")
+        check((ws4 / ".claude/skills/novel-init/scripts/init.sh").exists() and not (ws4 / ".claude/skills/novel-next").exists(),
+              "不覆盖 npx skills 已装的 .claude/skills/")
+        cache_home = tmp / "cache"
+        ws5 = tmp / "skills-only-clone"
+        (ws5 / ".claude/skills").mkdir(parents=True)
+        shutil.copytree(HARNESS / "skills/novel-init", ws5 / ".claude/skills/novel-init")
+        r = run("bash", str(ws5 / ".claude/skills/novel-init/scripts/init.sh"), cwd=ws5,
+                env={"XDG_CACHE_HOME": str(cache_home), "NOVEL_HARNESS_REPO": str(HARNESS)})
+        check(r.returncode == 0 and (cache_home / "novel-harness/src/tools/novel.py").exists() and (ws5 / ".claude/agents/writer.md").exists(),
+              f"skill 单独安装：无来源时浅克隆到缓存再初始化 ({r.stderr.strip()[:80] or 'ok'})")
+        # 本地 clone 取的是 HEAD 而不是工作树，把当前 novel.py 同步进缓存与工作区，再测缓存回退
+        for dst in (cache_home / "novel-harness/src/tools/novel.py", ws5 / "tools/novel.py"):
+            shutil.copy2(HARNESS / "tools/novel.py", dst)
+        (ws5 / "docs/protocol.md").write_text("stale", encoding="utf-8")
+        r = run(sys.executable, "tools/novel.py", "upgrade", cwd=ws5, env={"XDG_CACHE_HOME": str(cache_home)})
+        check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/" in r.stdout,
+              "工作区自身的 novel.py 能从缓存 upgrade 并刷新角色")
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

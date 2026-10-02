@@ -49,6 +49,18 @@ novel-harness（本仓库，装一次）          my-novel/（每部小说一个
 
 本地开发或试用：`git clone` 后 `claude --plugin-dir ./novel-harness`。
 
+**npx skills（Claude Code / Cursor / Codex 等通用 skill 安装器）**：
+
+```bash
+npx skills add hoobnn/novel-harness
+```
+
+它只会装 6 个 skill。第一次运行 `/novel-init` 时，`init.sh` 发现自己不在插件目录里，会把本仓库浅克隆到
+`~/.cache/novel-harness/src`，再以 standalone 模式初始化：七个角色复制进工作区 `.claude/agents/`，
+钩子写进 `.claude/settings.json`。之后 `python3 tools/novel.py upgrade` 会从这个缓存刷新。
+可用 `NOVEL_HARNESS_SRC` 指向现成的仓库目录跳过克隆。没有子智能体机制的 agent（Cursor、Codex 等）
+会退化为主会话按角色文件逐个扮演，连续性校验仍由 `novel.py` 保证。
+
 **不装插件**：在小说目录里 `python3 /path/to/novel-harness/tools/novel.py init --standalone`，
 角色与 skill 会复制到该目录的 `.claude/` 下，slash 命令去掉 `novel-harness:` 前缀。
 
