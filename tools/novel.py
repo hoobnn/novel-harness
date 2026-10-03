@@ -766,7 +766,8 @@ def validate_facts(n: int, facts: dict) -> list[str]:
         for c in s.get("characters", []):
             if c not in known and c not in new_cast:
                 errs.append(f"scenes[{i}] 角色「{c}」不在 characters.json / cast 中；若是新配角请写入 cast_intros，若是无名群众请不要列出")
-    later = {t["id"] for t in load_threads()}   # 后文章节落地的线程 id 也算已占用
+    # 后文章节落地的线程 id 也算已占用；本章自己 plant 出的（重提时已在投影里）除外
+    later = {t["id"] for t in load_threads() if t.get("planted_at") != n}
     tids = {t["id"] for t in L["threads"]}
     for i, u in enumerate(facts.get("threads", [])):
         if u.get("action") not in THREAD_ACTIONS:
@@ -2027,6 +2028,7 @@ def serve(host: str, port: int, open_browser: bool) -> None:
                 raise StudioError(400, "请求体不是 JSON")
 
         def _dispatch(self, method: str) -> None:
+            _PROJECTIONS.clear()   # 常驻进程：Agent 在别的进程里 commit 后，下一次请求就要看到新账本
             try:
                 self._guard(method != "GET")
                 url = urlparse(self.path)

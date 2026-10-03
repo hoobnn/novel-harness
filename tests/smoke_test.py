@@ -281,12 +281,32 @@ def smoke_ledger(ws: Path) -> None:
                       ("outline/volumes.json", json.dumps([{"title": "卷", "arcs": [{"title": "弧", "chapters": chapters}]}], ensure_ascii=False))):
         (ws / rel).parent.mkdir(parents=True, exist_ok=True)
         (ws / rel).write_text(text, encoding="utf-8")
+    import re
+    import urllib.request
+    e = {k: v for k, v in os.environ.items() if k != "NOVEL_ROOT"}
+    proc = subprocess.Popen([sys.executable, "tools/novel.py", "serve", "--port", "0"], cwd=ws, env=e,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    base = "http://127.0.0.1:" + re.search(r"127\.0\.0\.1:(\d+)/", proc.stdout.readline()).group(1)
+
+    def studio_t01():
+        with urllib.request.urlopen(base + "/api/overview", timeout=10) as r:
+            return next(t["status"] for t in json.loads(r.read())["threads"] if t["id"] == "T01")
+    try:
+        check(studio_t01() == "planned", "预览台起服务时 T01 尚未落地")
+        _ledger_flow(ws, nv)
+        check(studio_t01() == "active", "别的进程 commit 后预览台无需重启就看到新账本")
+    finally:
+        proc.terminate()
+
+
+def _ledger_flow(ws: Path, nv) -> None:
     locs = {1: "青石镇·铁匠铺", 2: "青石镇·客栈", 3: "黑水渡"}
     for n in (1, 2, 3):
         (ws / f"chapters/final/ch{n:04d}.md").write_text(f"# 第{n}章\n\n林越和老周在{locs[n]}说话。\n", encoding="utf-8")
         facts = {"chapter": n, "title": f"第{n}章", "summary": "…", "key_events": ["…"], "time": {"day_start": n, "day_end": n},
                  "scenes": [{"id": f"ch{n:04d}-s1", "day": n, "location": locs[n], "characters": ["林越", "老周"], "summary": f"林越在{locs[n]}"}],
-                 "threads": [{"id": "T01", "action": "plant" if n == 1 else "advance", "note": f"ch{n}"}],
+                 "threads": [{"id": "T01", "action": "plant" if n == 1 else "advance", "note": f"ch{n}"}]
+                            + ([{"action": "plant", "title": "老周的旧伤", "type": "foreshadow", "promise": "…", "note": "…"}] if n == 2 else []),
                  "knowledge": [{"who": "林越", "fact": f"第{n}章的秘密", "status": "knows"}],
                  "locations_end": {"林越": locs[n]}, "cast_intros": [{"name": "老周", "brief_role": "铁匠"}] if n == 1 else []}
         (ws / f"chapters/facts/ch{n:04d}.json").write_text(json.dumps(facts, ensure_ascii=False), encoding="utf-8")
@@ -296,12 +316,12 @@ def smoke_ledger(ws: Path) -> None:
         tl = (ws / "ledger/timeline.jsonl").read_text(encoding="utf-8").strip().splitlines()
         cast = json.loads((ws / "ledger/cast.json").read_text())
         th = json.loads((ws / "ledger/threads.json").read_text())
-        return len(tl), cast["老周"]["count"], len(th[0]["milestones"])
+        return len(tl), cast["老周"]["count"], len(th[0]["milestones"]), len(th)
     before = ledger_counts()
-    check(before == (3, 3, 3), f"三章提交后账本计数正确 {before}")
+    check(before == (3, 3, 3, 2), f"三章提交后账本计数正确 {before}")
     check(json.loads((ws / "threads/registry.json").read_text())[0].get("milestones") is None, "commit 不再改写 architect 的 registry")
     r = nv("commit", "2", "--force")
-    check(r.returncode == 0 and ledger_counts() == before, "commit --force 重提旧章不重复追加账本")
+    check(r.returncode == 0 and ledger_counts() == before, f"commit --force 重提 plant 过新线程的旧章：不误报、不重复追加 ({r.stdout.strip()[:120]})")
     ctx = nv("context", "2", "--for", "writer").stdout
     check("第1章的秘密" in ctx and "第3章的秘密" not in ctx and "黑水渡" not in ctx, "返工第 2 章时上下文只含第 1 章为止的知识与位置")
     rec = json.loads(nv("recall", "--entity", "林越", "--before", "2").stdout)
