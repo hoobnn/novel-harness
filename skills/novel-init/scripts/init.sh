@@ -29,5 +29,5 @@ if [ -z "$src" ]; then
   fi
 fi
 [ -f "$src/tools/novel.py" ] || { echo "$src 里没有 tools/novel.py" >&2; exit 1; }
-echo "harness 来源：$src（standalone 模式）"
+echo "harness 来源：${src}（standalone 模式）"
 exec python3 "$src/tools/novel.py" init --standalone "$@"
