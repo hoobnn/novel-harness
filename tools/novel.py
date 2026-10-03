@@ -23,7 +23,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 WORKSPACE_MARKER = "state/progress.json"      # 有它才算小说工作区
 HARNESS_ROOT = Path(__file__).resolve().parent.parent   # 本文件所在的 harness（插件目录或工作区）
 VENDORED = [                                   # 随 harness 版本走、init 复制进工作区、upgrade 刷新
@@ -112,6 +112,14 @@ DEFAULT_STYLE_RULES = {
         "一丝": 2, "一抹": 2, "一缕": 2, "宛如": 1, "不由得": 1,
         "像一": 3, "沉默了": 2, "没有说话": 2, "几息": 3, "一息": 3, "数息": 2,
     },
+    # 神态与躯体的默认动画（bible/style/anti-ai-tone.md 第三类）。叙述层每命中一次都是 issue，对白层只提醒
+    "forbidden_patterns": {
+        "眼中闪过一丝": r"眼[中底里神][^。！？\n]{0,4}闪过一[丝抹道]",
+        "嘴角勾起": r"(?:嘴角|唇角)[^。！？\n]{0,4}(?:勾起|扬起|翘起|上扬|扯出|牵起|浮起|一勾|一扯)",
+        "瞳孔一缩": r"瞳孔[^。！？\n]{0,4}(?:一缩|一紧|收缩|紧缩|骤缩|猛缩|放大)",
+        "倒吸一口凉气": r"倒(?:吸|抽)了?一口(?:凉|冷)气",
+        "目光一凝": r"目光一[凝沉冷]",
+    },
     "thread_stale_after": 6,
 }
 
@@ -120,12 +128,14 @@ PATTERNS = [
     ("计时量词『X息/X瞬』", re.compile(r"[一两二三四五六七八九十几数半][息瞬]")),
     ("明喻『像一/仿佛/如同/宛如』", re.compile(r"像一|仿佛|如同|宛如")),
     ("沉默节拍『沉默了/没有说话/没有回头』", re.compile(r"沉默了|没有说话|没有回头")),
-    ("神态模板『眼中闪过/嘴角勾起/咬了咬唇』", re.compile(r"眼[中底]闪过|目光一凝|瞳孔一缩|眼眶微红|嘴角[微轻一]?[勾扬翘]|咬了咬唇|不可置信")),
-    ("躯体反应『心头一紧/身子一颤/倒吸凉气』", re.compile(r"心头一[紧沉颤]|身子一[颤震僵]|倒吸(?:了)?一口凉气")),
+    ("神态模板『眼眶微红/咬了咬唇/不可置信』", re.compile(r"眼眶微红|咬了咬唇|不可置信")),
+    ("躯体反应『心头一紧/身子一颤』", re.compile(r"心头一[紧沉颤]|身子一[颤震僵]")),
     ("思维标记『心想/意识到/感到/觉得』", re.compile(r"心想|意识到|感到|觉得")),
     ("抽象套话『一种说不出的/的意义在于』", re.compile(r"一种说不出的|说不清[的道]|的意义在于|真正的[^。！？\n]{1,10}是")),
 ]
 SENT_SPLIT = re.compile(r"[。！？\n]+")
+SEPARATOR_LINE = re.compile(r"^[ \t]*(?:[-*_=~—·][ \t]*){3,}$", re.M)
+REPORT_TAIL = re.compile(r"字数[:：统]|修订(?:完成|说明|报告)|完成报告|返回报告|本章共计?\s*\d|写作说明")
 OPENING_TIME = re.compile(r"夜|清晨|黎明|天亮|醒来|晨光|一整夜")
 HOOK_TYPES = ["crisis", "reveal", "choice", "interrupted_action", "identity", "clue", "deadline", "emotional_aftermath", "relationship_shift", "quiet"]
 THREAD_TYPES = ["main", "subplot", "mystery", "relationship", "foreshadow", "character_arc", "world"]
@@ -463,6 +473,16 @@ def effective_verdict(review: dict) -> str:
     return derived if rank.get(derived, 0) > rank.get(declared, 0) else declared
 
 
+def review_round(n: int) -> int:
+    """当前评审轮次 = 已归档的往轮评审数 + 1。
+
+    轮次由文件推出而不是由 editor 自报：`next-round` 把上一轮的 review 与 check
+    一起改名为 chNNNN.rK.json / chNNNN.rK.check.json，路由数归档文件即可，
+    不依赖任何角色记得写对 round 字段。
+    """
+    return 1 + sum(1 for f in P["reviews"].glob(f"{ch_name(n)}.r*.json") if re.search(r"\.r\d+\.json$", f.name))
+
+
 def route(p: dict) -> dict:
     """确定性路由：读事实，给出下一步。不调用任何模型。"""
     missing = foundation_missing()
@@ -506,24 +526,25 @@ def route(p: dict) -> dict:
         return {"action": "writer", "chapter": n, "reason": "无草稿"}
     review = read_json(ch_path("reviews", n, "json"), None)
     check = read_json(P["reviews"] / f"{ch_name(n)}.check.json", None)
+    rnd = review_round(n)
     if review is None or check is None:
         missing_side = []
         if check is None:
             missing_side.append("checker")
         if review is None:
             missing_side.append("editor")
-        return {"action": "checker+editor", "chapter": n, "reason": "草稿待检查与评审",
+        return {"action": "checker+editor", "chapter": n, "round": rnd,
+                "reason": "草稿待检查与评审" if rnd == 1 else f"修订稿待第 {rnd} 轮检查与评审",
                 "missing": missing_side}
-    if review.get("round", 0) != check.get("round", review.get("round", 0)):
-        return {"action": "checker+editor", "chapter": n, "reason": "check 与 review 轮次不一致，需重跑本轮",
-                "missing": ["checker", "editor"]}
+    if isinstance(review.get("round"), int):  # 旧工作区靠删文件推进时没有归档，取自报值兜底
+        rnd = max(rnd, review["round"])
     verdict = effective_verdict(review)
-    rnd = review.get("round", 0)
     if verdict == "rewrite" and rnd >= 2:
-        return {"action": "blocked", "chapter": n,
-                "reason": "修订 2 轮后仍为 rewrite，按 CLAUDE.md 需停下询问用户"}
+        return {"action": "blocked", "chapter": n, "round": rnd,
+                "reason": "修订后第 2 轮评审仍为 rewrite，需停下询问用户"}
     if verdict in ("rewrite", "polish") and rnd < 2:
-        return {"action": "writer:revise", "chapter": n, "reason": f"评审结论 {verdict}", "round": rnd + 1}
+        return {"action": "writer:revise", "chapter": n, "round": rnd, "reason": f"第 {rnd} 轮评审结论 {verdict}",
+                "then": f"修订稿 lint 通过后运行 novel.py next-round {n}，归档本轮评审并进入第 {rnd + 1} 轮"}
     if not ch_path("final", n, "md").exists():
         return {"action": "finalize", "chapter": n, "reason": "评审通过，草稿待定稿"}
     if not ch_path("facts", n, "json").exists():
@@ -690,12 +711,21 @@ def split_dialog(body: str) -> tuple[str, str]:
     return narration, dialog
 
 
+def word_target(n: int | None, rules: dict | None = None) -> list[int]:
+    """本章字数区间：大纲条目的 target_words 优先，否则用 rules.json 的 word_count。"""
+    entry = locate(n) if n else None
+    tw = (entry or {}).get("target_words")
+    if isinstance(tw, list) and len(tw) == 2 and all(isinstance(x, int) for x in tw):
+        return tw
+    return (rules or style_rules()).get("word_count", [0, 10**9])
+
+
 def lint_text(text: str, n: int | None = None) -> dict:
     rules = style_rules()
     body = re.sub(r"^#.*$", "", text, flags=re.M)
     issues, warnings = [], []
     count = wc(text)
-    lo, hi = rules.get("word_count", [0, 10**9])
+    lo, hi = word_target(n, rules)
     if count < lo * 0.8:
         warnings.append(f"字数 {count} 明显低于目标下限 {lo}")
     elif count > hi * 1.25:
@@ -717,6 +747,25 @@ def lint_text(text: str, n: int | None = None) -> dict:
             warnings.append(f"对白中疲劳词「{w}」出现 {d} 次，偏多")
     if re.search(r"^\s*#{2,}\s", body, flags=re.M) or re.search(r"^\s*[一二三四五六七八九十]+[、.．]\s", body, flags=re.M):
         issues.append("正文中出现小标题/编号分段，应只保留章标题")
+    seps = SEPARATOR_LINE.findall(body)
+    if seps:
+        issues.append(f"正文中出现分割线 {len(seps)} 处（如「{seps[0].strip()}」），场景切换用空行过渡")
+    tail_lines = [l for l in body.strip().split("\n") if l.strip()][-6:]
+    hit = next((l.strip() for l in tail_lines if REPORT_TAIL.search(l)), None)
+    if hit:
+        warnings.append(f"章末疑似混入写作报告或字数统计「{hit[:30]}」；报告只在聊天里返回，不写进草稿")
+    for name, rx in rules.get("forbidden_patterns", {}).items():
+        try:
+            rxc = re.compile(rx)
+        except re.error as e:
+            warnings.append(f"rules.json 的 forbidden_patterns「{name}」不是合法正则：{e}")
+            continue
+        found = [m.group(0) for m in rxc.finditer(narration)]
+        if found:
+            issues.append(f"叙述中神态/躯体套语「{name}」出现 {len(found)} 次，例如「{found[0]}」")
+        d = sum(1 for _ in rxc.finditer(dialog))
+        if d:
+            warnings.append(f"对白中出现套语「{name}」{d} 次；若非刻意的人物口癖请改掉")
     if "——" in body and body.count("——") > 6:
         warnings.append(f"破折号出现 {body.count('——')} 次，偏多")
     patterns = {}
@@ -902,6 +951,19 @@ ROLE_NEEDS = {
 }
 
 
+def cast_line(kv: tuple[str, dict]) -> str:
+    """配角一行：登记信息 + 账本投影里的位置与状态字段（死亡、伤势、持有物都在 fields 里）。"""
+    name, c = kv
+    st = load_char_state(name)
+    extra = []
+    if st.get("location"):
+        extra.append(f"位置 {st['location']}")
+    if st.get("fields"):
+        extra.append("状态 " + json.dumps(st["fields"], ensure_ascii=False))
+    return (f"{name}：{c.get('brief_role', '')}（首见 ch{c.get('first_seen')}，末见 ch{c.get('last_seen')}，{c.get('count')} 次）"
+            + ("；" + "；".join(extra) if extra else ""))
+
+
 def needs(role: str, section: str) -> bool:
     return section in ROLE_NEEDS.get(role, set())
 
@@ -930,6 +992,8 @@ def build_context(n: int, role: str) -> str:
             quota.append(f"关键事件至少 {entry['min_key_events']} 个")
         if quota:
             out += ["", "## 本章进度配额（硬边界，commit 时校验）"] + [f"- {q}" for q in quota]
+        if entry.get("target_words"):
+            out.append(f"本章字数区间（大纲指定，覆盖全局）：{word_target(n, rules)}")
         nxt = locate(n + 1)
         if nxt:
             out += [f"下一章预告：《{nxt.get('title', '')}》— {nxt.get('core_event', '')}"]
@@ -937,6 +1001,14 @@ def build_context(n: int, role: str) -> str:
             out.append("**注意：本卷为收官卷，禁止新开长线。**")
     else:
         out += ["", "## 位置与大纲", "（本章尚无大纲条目）"]
+    # 停滞与超期线程放在最前面：只列在台账里时 planner 容易略过
+    tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
+    alarm = [t for t in tv if t["status"] in ("active", "dormant", "planned") and (t["stale"] or t["payoff_overdue"])]
+    if alarm and role in ("planner", "writer", "editor"):
+        out += ["", "## ⚠ 线程警示（规划时优先自然安排 touch 或 advance；不动就在计划里写明理由）"]
+        out += [f"- {t['id']}《{t['title']}》：" + "；".join(
+            ([f"已 {t['idle']} 章未推进"] if t["stale"] else []) + ([f"超过兑现窗口 {t.get('payoff_window')}"] if t["payoff_overdue"] else []))
+            for t in alarm]
     # compass
     compass = read_json(P["compass"], {})
     if compass and needs(role, "compass"):
@@ -978,7 +1050,6 @@ def build_context(n: int, role: str) -> str:
         out += ["", "## 时间线（最近事件）", f"日历规则见 bible/world/calendar.md。上章结束于故事第 {tl[-1].get('day')} 天。"]
         out.append(md_list(tl[-8:], lambda e: f"ch{e['chapter']} D{e.get('day')} {e.get('time_of_day', '')} @{e.get('location', '')}: {e['event']} [{','.join(e.get('characters', []))}]"))
     # threads
-    tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
     active = [t for t in tv if t["status"] in ("active", "dormant", "planned")]
     plan_ids = set(entry.get("threads") or []) if entry else set()
     # 分级：本章相关/到期/超期给全量，其余只给一行，避免后期几十条线程压垮上下文
@@ -1037,7 +1108,7 @@ def build_context(n: int, role: str) -> str:
     recent_cast = sorted(cast.items(), key=lambda kv: -(kv[1].get("last_seen") or 0))[:12] if needs(role, "cast") else []
     if recent_cast:
         out += ["", "## 近期活跃配角（再次出场前先 `novel.py recall --entity 名字` 找回口吻）"]
-        out.append(md_list(recent_cast, lambda kv: f"{kv[0]}：{kv[1].get('brief_role', '')}（首见 ch{kv[1].get('first_seen')}，末见 ch{kv[1].get('last_seen')}，{kv[1].get('count')} 次）"))
+        out.append(md_list(recent_cast, cast_line))
     # retrieval: related scenes
     if entry and p["last_committed"] > 0 and needs(role, "retrieval"):
         q_terms = set()
@@ -1058,9 +1129,10 @@ def build_context(n: int, role: str) -> str:
             out.append(md_list(rel[:12], lambda s: f"ch{s['chapter']} {s['scene_id']} D{s.get('day')} @{s.get('location')} [{s.get('characters')}]: {s.get('summary')}"))
     # style
     if needs(role, "style_full"):
-        out += ["", "## 文风约束", read_text(P["voice"]).strip() or "（bible/style/voice.md 未写）"]
+        out += ["", "## 文风约束", f"本章目标字数 {word_target(n, rules)}（lint 按此区间告警）。",
+                read_text(P["voice"]).strip() or "（bible/style/voice.md 未写）"]
     elif needs(role, "style_brief"):
-        out += ["", "## 文风约束（要点）", f"目标字数 {rules.get('word_count')}；禁用套句见 bible/style/rules.json；完整标准见 bible/style/voice.md"]
+        out += ["", "## 文风约束（要点）", f"目标字数 {word_target(n, rules)}；禁用套句见 bible/style/rules.json；完整标准见 bible/style/voice.md"]
     ur = read_text(P["user_rules"]).strip()
     if ur and (needs(role, "style_full") or needs(role, "style_brief")):
         out += ["", "### 用户偏好（优先级高于默认文风）", ur]
@@ -1089,12 +1161,15 @@ def build_context(n: int, role: str) -> str:
         out.append("处理后由主会话 `novel.py comment resolve <id> \"怎么处理的\"` 关闭。")
     # role-specific
     if role == "planner":
-        out += ["", "## 规划要求", f"目标字数区间：{rules.get('word_count')}；线程 stale 阈值：{rules.get('thread_stale_after')} 章。",
+        out += ["", "## 规划要求", f"目标字数区间：{word_target(n, rules)}；线程 stale 阈值：{rules.get('thread_stale_after')} 章。",
                 "输出 chapters/plans/chNNNN.md，包含：目标、冲突、视点、场景节拍表（每场景：地点/时间/在场/目的/转折/离场状态）、线程预算（推进哪几条、各自动作）、契约（required_beats / forbidden_moves / continuity_checks / knowledge_boundaries / emotion_target / hook_goal）。"]
     if role == "writer":
         plan = read_text(ch_path("plans", n, "md"))
         out += ["", "## 本章计划（chapters/plans）", plan or "（缺失，先运行 planner）"]
     if role in ("checker", "editor"):
+        rnd = review_round(n)
+        out += ["", "## 评审轮次", f"本轮是第 {rnd} 轮评审，产物的 `round` 字段写 {rnd}。"
+                + (f"上一轮评审已归档为 chapters/reviews/{ch_name(n)}.r{rnd - 1}.json，可对照其 revision_instructions 核实是否落实。" if rnd > 1 else "")]
         plan = read_text(ch_path("plans", n, "md"))
         out += ["", "## 本章计划与契约", plan or "（无）"]
         out += ["", "## 确定性检查结果", "```json", json.dumps(check_chapter(n, read_json(ch_path("facts", n, "json"), None)), ensure_ascii=False, indent=1), "```"]
@@ -1243,6 +1318,24 @@ def commit(n: int, force: bool = False) -> None:
             flags.append("VOLUME_END")
     print(json.dumps({"committed": n, "words": wc(final), "next_chapter": p["next_chapter"], "flags": flags,
                       "route": route(p)}, ensure_ascii=False))
+
+
+def next_round(n: int) -> None:
+    rv, ck = ch_path("reviews", n, "json"), P["reviews"] / f"{ch_name(n)}.check.json"
+    review = read_json(rv, None)
+    if review is None or not ck.exists():
+        fail(f"第 {n} 章本轮的 review 与 check 不齐，没有可归档的评审")
+    rnd = review_round(n)
+    if effective_verdict(review) == "accept" or rnd >= 2:
+        fail(f"第 {n} 章第 {rnd} 轮评审不需要再修订（见 status 的 route）")
+    lint = lint_text(read_text(ch_path("drafts", n, "md")), n)
+    if lint["issues"]:
+        print("\n".join("- " + i for i in lint["issues"]))
+        fail("修订稿 lint 未通过，先让写手修到 issues 为空", 2)
+    rv.rename(P["reviews"] / f"{ch_name(n)}.r{rnd}.json")
+    ck.rename(P["reviews"] / f"{ch_name(n)}.r{rnd}.check.json")
+    checkpoint(n, "next-round", f"第 {rnd} 轮评审归档，进入第 {rnd + 1} 轮")
+    print(json.dumps({"archived_round": rnd, "round": rnd + 1, "route": route(load_progress())}, ensure_ascii=False))
 
 
 def reindex() -> None:
@@ -1750,7 +1843,7 @@ def chapter_stage(n: int, p: dict) -> dict:
     else:
         stage = "outline"
     return {"stage": stage, "verdict": effective_verdict(review) if review else None,
-            "round": review.get("round") if review else None}
+            "round": review_round(n) if review else None}
 
 
 def studio_chapters(p: dict) -> list[dict]:
@@ -2020,6 +2113,8 @@ def main(argv: list[str]) -> None:
     s = sub.add_parser("commit", help="提交定稿：校验事实、更新账本、索引、进度")
     s.add_argument("chapter", type=int)
     s.add_argument("--force", action="store_true")
+    s = sub.add_parser("next-round", help="修订稿 lint 通过后归档本轮 review/check，进入下一轮评审")
+    s.add_argument("chapter", type=int)
     s = sub.add_parser("finalize", help="把草稿复制为定稿（评审通过后）")
     s.add_argument("chapter", type=int)
     s.add_argument("--force", action="store_true", help="允许覆盖已提交章节的定稿")
@@ -2115,6 +2210,8 @@ def main(argv: list[str]) -> None:
         print(json.dumps(stylestat(a.upto), ensure_ascii=False, indent=1))
     elif a.cmd == "commit":
         commit(a.chapter, a.force)
+    elif a.cmd == "next-round":
+        next_round(a.chapter)
     elif a.cmd == "finalize":
         d = read_text(ch_path("drafts", a.chapter, "md"))
         if not d:

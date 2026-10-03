@@ -23,7 +23,7 @@ model: inherit
 
 verdict：有 critical → rewrite；无 critical 有 error → polish；只有 warning → accept。accept 是最常见的结果；不要因为「整体还能更好」升级结论。
 
-写 `chapters/reviews/chNNNN.json`（格式见 `docs/schemas.md`），`round` 用主会话告知的轮次。`revision_instructions` 按「先硬伤、再结构、后文字」排序，每条指向具体段落并给出改法；polish 结论下不超过 8 条。
+写 `chapters/reviews/chNNNN.json`（格式见 `docs/schemas.md`），`round` 用上下文包「评审轮次」给出的数字。第 2 轮先核对上一轮归档评审的 `revision_instructions` 是否落实。`revision_instructions` 按「先硬伤、再结构、后文字」排序，每条指向具体段落并给出改法；polish 结论下不超过 8 条。
 
 ## 弧级评审
 

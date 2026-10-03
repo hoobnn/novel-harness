@@ -26,7 +26,7 @@ model: sonnet
 写 `chapters/reviews/chNNNN.check.json`：
 
 ```json
-{"chapter": N, "findings": [
+{"chapter": N, "round": R, "findings": [
   {"kind": "timeline|location|knowledge|state|relationship|world_rule|thread|cast",
    "severity": "critical|error|warning",
    "description": "一句话说清矛盾",
@@ -35,6 +35,8 @@ model: sonnet
    "suggestion": "最小改法"}],
  "false_positives": ["确定性检查里被你排除的项及理由"]}
 ```
+
+`round` 用上下文包「评审轮次」给出的数字。
 
 severity：critical = 逻辑硬伤（死人复活、人物知道不可能知道的事、时间倒流）；error = 明显矛盾（位置无法到达、状态描写冲突）；warning = 需要一句交代就能补上的小缝隙。
 

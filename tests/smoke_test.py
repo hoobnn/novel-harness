@@ -201,9 +201,61 @@ def main() -> None:
                 check((ws6 / ".agents/agents/writer.md").exists(), "0.1.0 工作区 init --standalone 生成 Antigravity 角色")
         # 8. 预览台：在 init 出来的工作区里起服务（端口 0 取随机空闲端口）
         smoke_studio(ws)
+        # 9. lint 新规则与评审轮次流转
+        ws7 = tmp / "rounds"
+        ws7.mkdir()
+        run(sys.executable, str(NOVEL), "init", cwd=ws7)
+        smoke_rounds(ws7)
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def smoke_rounds(ws: Path) -> None:
+    def nv(*args):
+        return run(sys.executable, "tools/novel.py", *args, cwd=ws)
+
+    def route():
+        return json.loads(nv("status").stdout)["route"]
+
+    for rel, text in (("bible/premise.md", "# 故事前提\n"), ("bible/world/rules.md", "# 规则\n"), ("bible/world/calendar.md", "# 日历\n"),
+                      ("outline/compass.json", "{}"), ("threads/registry.json", '[{"id":"T01","title":"线","type":"main","status":"planned"}]'),
+                      ("bible/characters.json", '[{"name":"林越","slug":"lin-yue","tier":"core"}]'),
+                      ("outline/volumes.json", json.dumps([{"title": "卷", "arcs": [{"title": "弧", "chapters": [
+                          {"title": "一", "characters": ["林越"], "target_words": [10, 60]}, {"title": "二"}]}]}], ensure_ascii=False)),
+                      ("chapters/plans/ch0001.md", "# 计划\n")):
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text(text, encoding="utf-8")
+    draft = ws / "chapters/drafts/ch0001.md"
+    draft.write_text("# 借炉\n\n他瞳孔骤然紧缩，倒抽一口凉气。\n\n---\n\n她嘴角扯出一抹弧度。\n\n字数：3200\n", encoding="utf-8")
+    lint = json.loads(nv("lint", "1").stdout)
+    joined = " ".join(lint["issues"])
+    check(all(k in joined for k in ("瞳孔一缩", "倒吸一口凉气", "嘴角勾起", "分割线")), "lint：神态套语变体与分割线报 issue")
+    check(any("写作报告" in w for w in lint["warnings"]), "lint：章末混入字数统计报 warning")
+    draft.write_text("# 借炉\n\n" + "炉火很旺。" * 30 + "\n", encoding="utf-8")
+    lint = json.loads(nv("lint", "1").stdout)
+    check(any("目标上限 60" in w for w in lint["warnings"]), "lint：大纲 target_words 覆盖全局字数区间")
+    draft.write_text("# 借炉\n\n炉火很旺，他把铁钳递过去。\n", encoding="utf-8")
+    ctx = nv("context", "1", "--for", "editor").stdout
+    check("本轮是第 1 轮评审" in ctx, "editor 上下文包写明评审轮次")
+    r = route()
+    check(r["action"] == "checker+editor" and r["round"] == 1, "首轮评审路由带 round=1")
+    reviews = ws / "chapters/reviews"
+    polish = {"chapter": 1, "round": 1, "verdict": "polish", "issues": [{"severity": "error"}]}
+    (reviews / "ch0001.json").write_text(json.dumps(polish), encoding="utf-8")
+    (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": []}', encoding="utf-8")
+    check(route()["action"] == "writer:revise", "第 1 轮 polish 路由到 writer:revise")
+    r = nv("next-round", "1")
+    check(r.returncode == 0 and (reviews / "ch0001.r1.json").exists() and (reviews / "ch0001.r1.check.json").exists(),
+          "next-round 归档本轮 review 与 check")
+    r = route()
+    check(r["action"] == "checker+editor" and r["round"] == 2, "归档后进入第 2 轮评审")
+    (reviews / "ch0001.json").write_text(json.dumps(polish), encoding="utf-8")   # editor 照旧写错 round=1
+    (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": []}', encoding="utf-8")
+    check(route()["action"] == "finalize", "第 2 轮仍 polish 直接 finalize，不受 editor 自报 round 影响")
+    check(nv("next-round", "1").returncode != 0, "第 2 轮后 next-round 被拒绝")
+    (reviews / "ch0001.json").write_text(json.dumps({**polish, "verdict": "rewrite", "issues": [{"severity": "critical"}]}), encoding="utf-8")
+    check(route()["action"] == "blocked", "第 2 轮仍 rewrite 时 blocked")
 
 
 def smoke_studio(ws: Path) -> None:

@@ -15,7 +15,7 @@ bible/                     静态设定（权威，改动需人工确认）
   world/calendar.md        日历：第 1 天定义、季节、节庆、关键日期
   style/voice.md           文风标准（写手与编辑共用）
   style/anti-ai-tone.md    去 AI 味判据（语义层）
-  style/rules.json         机械规则：字数区间、禁用套句、疲劳词阈值、线程 stale 阈值
+  style/rules.json         机械规则：字数区间、禁用套句、禁用套语正则（forbidden_patterns）、疲劳词阈值、线程 stale 阈值
   style/user-rules.md      用户随手写的偏好（优先级最高，自然语言）
   style/samples.md         目标文风样张（可选，只借鉴手法不抄句子）
 outline/
@@ -28,8 +28,9 @@ ledger/                    动态事实（只由 novel.py commit 写入）
 chapters/
   plans/chNNNN.md          章节计划（节拍表 + 契约 + 线程预算）
   drafts/chNNNN.md         草稿（写手/修订者写入）
-  reviews/chNNNN.json      编辑评审（含 round）
-  reviews/chNNNN.check.json 连续性检查结论（checker 产出，与 review 同 round）
+  reviews/chNNNN.json      编辑评审（当前轮，含 round）
+  reviews/chNNNN.check.json 连续性检查结论（checker 产出，当前轮）
+  reviews/chNNNN.rK.json / chNNNN.rK.check.json  第 K 轮的归档（next-round 产生）
   final/chNNNN.md          定稿（finalize 后）
   facts/chNNNN.json        章节事实（账本员抽取，commit 时校验）
 summaries/chapters|arcs|volumes/
@@ -72,7 +73,7 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
   {"title":"青石镇","goal":"…","estimated_chapters":10,"chapters":[
     {"title":"借炉","core_event":"…","hook":"…","scenes":["…","…"],
      "threads":["T01"],"characters":["林越"],"day_hint":"D1-D2",
-     "must_advance":["T01"],"min_key_events":2}]},
+     "must_advance":["T01"],"min_key_events":2,"target_words":[4000,8500]}]},
   {"title":"骨架弧","goal":"…","estimated_chapters":12}]}]
 ```
 
@@ -83,7 +84,9 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
 - `must_advance`: 本章必须**实质推进**的线程 id（facts 里必须出现对应的 `advance` / `resolve` / `plant`，`touch` 不算）
 - `min_key_events`: 本章 `key_events` 的最少条数
 
-两者由 architect 展开弧时按需要写，不写就不检查。`commit` 前由 `validate-facts` 硬校验，
+两者由 architect 展开弧时按需要写，不写就不检查。
+
+**字数区间（可选）**：`target_words: [下限, 上限]` 覆盖 `bible/style/rules.json` 的 `word_count`，给高潮章、收官章这类需要更大篇幅的章节用。`lint` 与上下文包都按覆盖后的区间。`commit` 前由 `validate-facts` 硬校验，
 并在上下文包里以「本章进度配额」段提前告知 planner 与 writer。
 剧情确实偏离大纲时，写进 `outline_feedback` 并让 architect 改大纲，不要靠放宽配额绕过。
 
@@ -169,9 +172,11 @@ verdict 规则：有 critical → rewrite；无 critical 有 error → polish；
 
 该规则由 `novel.py` 的 `effective_verdict()` 从 `issues` 反推校验：若声明的 verdict 比反推结果宽松，以反推结果为准（例如 issues 里有 critical 却写 accept，按 rewrite 处理）。
 
-round 由主会话递增，最多 2 轮修订。第 2 轮后仍为 `polish` 则强制 finalize，把遗留问题写进 `outline_feedback`；仍为 `rewrite` 时 `route` 返回 `blocked`，主会话必须停下询问用户。
+round 由文件推出：当前轮 = 已归档的 `chNNNN.rK.json` 个数 + 1，`route` 在 `checker+editor` / `writer:revise` 里给出，上下文包也会写明。写手修订后由主会话运行 `novel.py next-round N`：先 lint 修订稿，通过后把本轮 `chNNNN.json` 与 `chNNNN.check.json` 改名为 `chNNNN.rK.json` / `chNNNN.rK.check.json`，路由随即进入第 K+1 轮。不要手删 review。
 
-`chapters/reviews/chNNNN.check.json`（checker 产出）与 `chNNNN.json` 必须同时存在且 `round` 一致，否则 `route` 判定本轮未完成、重派 `checker+editor`。
+第 1 轮为 `polish` / `rewrite` 时修订一次；第 2 轮仍为 `polish` 则强制 finalize，把遗留问题写进 `outline_feedback`；仍为 `rewrite` 时 `route` 返回 `blocked`，主会话必须停下询问用户。
+
+`chNNNN.check.json` 与 `chNNNN.json` 必须同时存在，否则 `route` 判定本轮未完成、重派缺的那一方。
 
 ## summaries
 

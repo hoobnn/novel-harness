@@ -30,7 +30,7 @@ python3 tools/novel.py status
 
 ## 展开弧
 
-读 `python3 tools/novel.py context <下一章号> --for planner` 拿到前情、线程台账、人物状态，再读 `summaries/arcs/` 与 `outline/volumes.json`。把已写正文视为现实，把骨架视为可修订的计划：允许重定 title/goal。为每章填 title / core_event / hook / scenes / threads / characters / day_hint。给推动主线的章填进度配额 `must_advance`（本章必须实质推进的线程 id，`touch` 不算）与 `min_key_events`（关键事件最少条数），防止写成只有氛围没有进展的水章；过渡章可以不填。配额会在 commit 时硬校验，所以只写你真正要求的，不要为凑数而填。让到期的线程（`threads --stale`、`payoff_due`）在本弧内被安排推进或兑现。收官卷内禁止新开长线。
+读 `python3 tools/novel.py context <下一章号> --for planner` 拿到前情、线程台账、人物状态，再读 `summaries/arcs/` 与 `outline/volumes.json`。把已写正文视为现实，把骨架视为可修订的计划：允许重定 title/goal。为每章填 title / core_event / hook / scenes / threads / characters / day_hint。给推动主线的章填进度配额 `must_advance`（本章必须实质推进的线程 id，`touch` 不算）与 `min_key_events`（关键事件最少条数），防止写成只有氛围没有进展的水章；过渡章可以不填。配额会在 commit 时硬校验，所以只写你真正要求的，不要为凑数而填。高潮章、收官章这类确需更大篇幅的章节，可以填 `target_words: [下限, 上限]` 覆盖全局字数区间。让到期的线程（`threads --stale`、`payoff_due`）在本弧内被安排推进或兑现。收官卷内禁止新开长线。
 
 ## 新卷 / 完结判定
 
