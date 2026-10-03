@@ -68,7 +68,7 @@ flowchart LR
 ```
 novel-harness（本仓库，装一次）          my-novel/（每部小说一个目录，init 生成）
 ├── agents/      七个角色               ├── CLAUDE.md        指向 docs/protocol.md 的入口
-├── skills/      六个 /novel-* 入口     ├── docs/protocol.md 调度协议   ┐ 随版本复制
+├── skills/      七个 /novel-* 入口     ├── docs/protocol.md 调度协议   ┐ 随版本复制
 ├── hooks/       写入后校验钩子         ├── docs/schemas.md  数据契约   │ upgrade 刷新
 ├── tools/novel.py                      ├── tools/novel.py              ┘
 ├── docs/        protocol + schemas     ├── bible/ outline/ threads/   权威设定（architect 写）
@@ -104,7 +104,7 @@ Cursor、Codex、OpenCode、Antigravity、Pi 用这种方式；不想装插件�
 npx skills add hoobnn/novel-harness
 ```
 
-这一步只装 6 个 skill。第一次运行 `novel-init` 时，`init.sh` 发现自己不在插件目录里，
+这一步只装 7 个 skill。第一次运行 `novel-init` 时，`init.sh` 发现自己不在插件目录里，
 会把本仓库浅克隆到 `~/.cache/novel-harness/src`，再以 standalone 模式初始化：按运行时生成七个角色的子智能体定义、
 复制 skill、写入钩子。之后 `python3 tools/novel.py upgrade` 从这个缓存刷新。
 设置 `NOVEL_HARNESS_SRC` 指向已有的仓库目录可以跳过克隆；`--runtime cursor,codex` 只生成指定运行时的文件。
@@ -144,7 +144,13 @@ npx skills add hoobnn/novel-harness
 /novel-harness:novel-steer 感情线提前到第 4 章  # 插入调整
 /novel-harness:novel-sync                      # 手改了 chapters/final 之后重建账本
 /novel-harness:novel-arc-review v1a2           # 补做或重做弧级 / 卷级评审
+/novel-harness:novel-preview                   # 打开本地 Web 预览台
 ```
+
+预览台（`python3 tools/novel.py serve`）是一个只绑本机的网页：总览页有章节进度、下一步路由和故事线健康度，
+Agent 写入的产物几秒内就会出现。设定、大纲、计划、草稿、定稿可以直接在网页里改，
+保存时会检查冲突，Agent 刚写过的文件不会被旧版本覆盖。选中正文可以批注，未处理的批注会进入该章的上下文包；
+勾选「交给 Agent」后，批注会变成一条干预，下一轮优先处理。
 
 工作区最好是 git 仓库。每章 commit 后主会话会跑一次 `git commit`，每次改动都能追溯。
 

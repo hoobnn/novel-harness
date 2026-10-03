@@ -58,6 +58,15 @@
 3. 已写内容返工类（「第 4 章重写」「把 X 改成女性」）→ 派 editor 圈定**最小充分章节集合**并逐个 `queue-revision`，走 `revise` 路由。
 4. 控制类（「写到第 20 章」「停」「gate auto」）→ 直接执行。
 
+## 预览台（`novel.py serve`）
+
+用户可以在本地网页里查看进度、编辑产物、写批注。主会话需要知道的边界：
+- 网页只能改 `bible/`、`outline/`、`threads/`、`chapters/plans|drafts|final`；评审、事实、账本、状态只读。保存时会做 sha 冲突检查，每次保存记一行 `state/decisions.jsonl`（`kind=studio-edit`）。网页写入不经过钩子，所以派发前仍以 `lint` / `status` 为准。
+- 用户改了已提交章节的定稿，`status.unsynced` 会列出来，按 `novel-sync` 处理。用户改了 `bible/` 或大纲，视同用户授权的设定变更，不要改回去。
+- 批注存在 `state/comments.json`。未处理批注会自动注入对应章节的 planner / writer / checker / editor 上下文包（「用户批注」段）。角色照批注改完后，主会话 `novel.py comment resolve <id> "怎么处理的"` 关闭它。
+- 用户在网页上把批注「交给 Agent」，或者直接写干预，都会进 `steer_queue`；带 `comment` 字段的干预处理完，除了 `steer pop` 还要 `comment resolve <该 id>`。已提交章节的批注只有走这条路才会触发返工。
+- `status.comments_open` 是未处理批注数。闸门停下汇报时，有未处理批注要一并提醒。
+
 ## 模型与成本
 
 - 创作角色（architect / planner / writer / editor / judge）用主会话模型；抽取与核对角色（ledger / checker）用 sonnet。可在角色定义文件（插件 `agents/*.md`，standalone 为工作区 `.claude/agents/*.md`）的 `model` 字段调整。
@@ -87,5 +96,7 @@ python3 tools/novel.py check 12 / lint 12 / stylestat
 python3 tools/novel.py gate per-chapter
 python3 tools/novel.py checkpoint add 12 writer "草稿 3600 字"   # 子智能体返回并校验通过后记一步
 python3 tools/novel.py checkpoint list 12
+python3 tools/novel.py serve --open           # 本地 Web 预览台（默认 127.0.0.1:8765）
+python3 tools/novel.py comment list / resolve c0003 "已改"
 python3 <插件目录>/tools/novel.py upgrade   # 升级 harness 后刷新工作区的 novel.py / 钩子 / 契约
 ```

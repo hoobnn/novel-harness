@@ -23,12 +23,13 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 WORKSPACE_MARKER = "state/progress.json"      # 有它才算小说工作区
 HARNESS_ROOT = Path(__file__).resolve().parent.parent   # 本文件所在的 harness（插件目录或工作区）
 VENDORED = [                                   # 随 harness 版本走、init 复制进工作区、upgrade 刷新
     "tools/novel.py",
     "tools/hooks/post_write.sh",
+    "tools/studio.html",
     "docs/schemas.md",
     "docs/protocol.md",
 ]
@@ -74,6 +75,7 @@ P = {
     "progress": ROOT / "state/progress.json",
     "decisions": ROOT / "state/decisions.jsonl",
     "checkpoints": ROOT / "state/checkpoints.jsonl",
+    "comments": ROOT / "state/comments.json",
     "premise": ROOT / "bible/premise.md",
     "characters": ROOT / "bible/characters.json",
     "char_dir": ROOT / "bible/characters",
@@ -887,14 +889,14 @@ def md_list(items, fmt=lambda x: str(x)) -> str:
 # ledger 只做结构化抽取，不需要文风与评审教训；checker 只核事实，不需要声音卡与口头禅镜像。
 ROLE_NEEDS = {
     "planner": {"outline", "compass", "summaries", "timeline", "threads_full", "characters",
-                "knowledge", "cast", "retrieval", "lessons", "style_brief"},
+                "knowledge", "cast", "retrieval", "lessons", "style_brief", "comments"},
     "writer":  {"outline", "compass", "summaries", "prev_tail", "timeline", "threads_full",
                 "characters", "knowledge", "voice_card", "cast", "retrieval", "lessons",
-                "style_full", "style_mirror", "plan"},
+                "style_full", "style_mirror", "plan", "comments"},
     "checker": {"outline", "summaries", "timeline", "threads_full", "characters", "knowledge",
-                "cast", "retrieval", "plan", "deterministic"},
+                "cast", "retrieval", "plan", "deterministic", "comments"},
     "editor":  {"outline", "compass", "summaries", "prev_tail", "threads_full", "characters",
-                "voice_card", "lessons", "style_full", "style_mirror", "plan", "deterministic"},
+                "voice_card", "lessons", "style_full", "style_mirror", "plan", "deterministic", "comments"},
     "ledger":  {"outline", "summaries", "timeline", "threads_brief", "characters", "knowledge",
                 "cast", "retrieval"},
 }
@@ -1079,6 +1081,12 @@ def build_context(n: int, role: str) -> str:
                     lessons.append(f"ch{m} [{iss.get('dimension')}] {iss.get('description')}")
     if lessons:
         out += ["", "## 近期评审教训（不要重犯）", md_list(lessons)]
+    # 用户在预览台留下的批注：只注入本章、仍 open 的
+    notes = [c for c in load_comments() if c.get("chapter") == n and c.get("status") == "open"] if needs(role, "comments") else []
+    if notes:
+        out += ["", "## 用户批注（未处理，优先级同用户偏好）"]
+        out += [f"- [{c['id']}] {c['path']}" + (f"「{c['quote']}」" if c.get("quote") else "") + f"：{c['text']}" for c in notes]
+        out.append("处理后由主会话 `novel.py comment resolve <id> \"怎么处理的\"` 关闭。")
     # role-specific
     if role == "planner":
         out += ["", "## 规划要求", f"目标字数区间：{rules.get('word_count')}；线程 stale 阈值：{rules.get('thread_stale_after')} 章。",
@@ -1657,7 +1665,299 @@ def status() -> dict:
             "recent_steps": last_checkpoints(limit=5),
             "threads": {"active": sum(t["status"] == "active" for t in tv), "stale": [t["id"] for t in tv if t["stale"]],
                         "overdue": [t["id"] for t in tv if t["payoff_overdue"]]},
-            "unsynced": sync_check(), "words_total": sum(wc(read_text(f)) for f in P["final"].glob("ch*.md"))}
+            "unsynced": sync_check(), "words_total": sum(wc(read_text(f)) for f in P["final"].glob("ch*.md")),
+            "comments_open": sum(c.get("status") == "open" for c in load_comments())}
+
+
+# ---------------------------------------------------------------- comments（预览台批注）
+def load_comments() -> list[dict]:
+    return read_json(P["comments"], [])
+
+
+def add_comment(path: str, text: str, quote: str = "") -> dict:
+    rows = load_comments()
+    m = re.search(r"ch(\d{4})", path)
+    c = {"id": f"c{max([int(x['id'][1:]) for x in rows] or [0]) + 1:04d}", "at": now(), "path": path,
+         "chapter": int(m.group(1)) if m else None, "quote": quote, "text": text, "status": "open"}
+    rows.append(c)
+    write_json(P["comments"], rows)
+    return c
+
+
+def update_comment(cid: str, **fields) -> dict:
+    rows = load_comments()
+    for c in rows:
+        if c["id"] == cid:
+            c.update(fields)
+            write_json(P["comments"], rows)
+            return c
+    raise KeyError(cid)
+
+
+def steer_comment(cid: str) -> dict:
+    """把批注转成一条用户干预，走 steer 路由；处理完由主会话 resolve。"""
+    c = next((x for x in load_comments() if x["id"] == cid), None)
+    if c is None:
+        raise KeyError(cid)
+    p = load_progress()
+    quote = f"「{c['quote']}」" if c.get("quote") else ""
+    p.setdefault("steer_queue", []).append({"text": f"[批注 {cid}] {c['path']}{quote}：{c['text']}", "at": now(), "comment": cid})
+    save_progress(p)
+    return update_comment(cid, steered=now())
+
+
+# ---------------------------------------------------------------- studio（本地 Web 预览台）
+# 只开放给人看与改的目录。ledger/、state/、summaries/chapters/、index/ 只由 novel.py 写入，网页只读或不可见；
+# 评审与事实是角色产物，网页只读，返工走批注或干预。
+STUDIO_EDITABLE = ("bible/", "outline/", "threads/", "chapters/plans/", "chapters/drafts/", "chapters/final/")
+STUDIO_READABLE = STUDIO_EDITABLE + ("chapters/reviews/", "chapters/facts/", "summaries/", "ledger/", "state/progress.json")
+STUDIO_TEXT_EXT = {".md", ".json", ".jsonl", ".txt"}
+STUDIO_WATCH = ("bible", "outline", "threads", "chapters", "summaries", "state")
+
+
+class StudioError(Exception):
+    def __init__(self, code: int, msg: str, **extra):
+        super().__init__(msg)
+        self.code, self.extra = code, extra
+
+
+def studio_path(rel: str, write: bool = False) -> Path:
+    rel = (rel or "").replace("\\", "/").lstrip("/")
+    allowed = STUDIO_EDITABLE if write else STUDIO_READABLE
+    if ".." in rel.split("/") or not any(rel == a or rel.startswith(a) for a in allowed):
+        raise StudioError(403, f"{rel} 不在{'可编辑' if write else '可查看'}范围内" +
+                          ("（ledger/、state/、summaries/、评审与事实只由工具或角色写入）" if write else ""))
+    path = (ROOT / rel).resolve()
+    if not path.is_relative_to(ROOT.resolve()) or path.suffix not in STUDIO_TEXT_EXT:
+        raise StudioError(403, f"{rel} 不可访问")
+    return path
+
+
+def chapter_stage(n: int, p: dict) -> dict:
+    """单章所处阶段，判断口径与 route() 一致：只看产物文件。"""
+    review = read_json(ch_path("reviews", n, "json"), None)
+    facts = read_json(ch_path("facts", n, "json"), None)
+    if n <= p["last_committed"] and facts and facts.get("committed_sha"):
+        stage = "committed"
+    elif ch_path("final", n, "md").exists():
+        stage = "ledger" if not facts else "commit"
+    elif review:
+        stage = "review"
+    elif ch_path("drafts", n, "md").exists():
+        stage = "draft"
+    elif ch_path("plans", n, "md").exists():
+        stage = "plan"
+    else:
+        stage = "outline"
+    return {"stage": stage, "verdict": effective_verdict(review) if review else None,
+            "round": review.get("round") if review else None}
+
+
+def studio_chapters(p: dict) -> list[dict]:
+    open_by_ch = Counter(c["chapter"] for c in load_comments() if c.get("status") == "open" and c.get("chapter"))
+    unsynced = {u["chapter"] for u in sync_check()}
+    rows = []
+    for e in flatten_outline(read_json(P["volumes"], [])):
+        n = e["chapter"]
+        text = read_text(ch_path("final", n, "md")) or read_text(ch_path("drafts", n, "md"))
+        rows.append({"chapter": n, "title": e.get("title", ""), "volume": e["volume"], "arc": e["arc"],
+                     "volume_title": e["volume_title"], "arc_title": e["arc_title"], "core_event": e.get("core_event", ""),
+                     "words": wc(text) if text else 0, "comments_open": open_by_ch.get(n, 0), "unsynced": n in unsynced,
+                     "files": {k: ch_path(k, n, ext).exists() for k, ext in
+                               (("plans", "md"), ("drafts", "md"), ("final", "md"), ("reviews", "json"), ("facts", "json"))},
+                     **chapter_stage(n, p)})
+    return rows
+
+
+def studio_files() -> list[str]:
+    out = []
+    for d in ("bible", "outline", "threads", "summaries/arcs", "summaries/volumes"):
+        for f in sorted((ROOT / d).rglob("*")):
+            if f.is_file() and f.suffix in STUDIO_TEXT_EXT:
+                out.append(f.relative_to(ROOT).as_posix())
+    return out
+
+
+def studio_stamp() -> float:
+    """工作区最近一次变动的时间，页面轮询它决定要不要刷新。"""
+    latest = 0.0
+    for d in STUDIO_WATCH:
+        for f in (ROOT / d).rglob("*"):
+            try:
+                latest = max(latest, f.stat().st_mtime)
+            except OSError:
+                pass
+    return latest
+
+
+def studio_read(rel: str) -> dict:
+    path = studio_path(rel)
+    if not path.exists():
+        raise StudioError(404, f"{rel} 不存在")
+    text = read_text(path)
+    out = {"path": rel, "text": text, "sha": sha(text), "editable": any(rel.startswith(a) for a in STUDIO_EDITABLE),
+           "comments": [c for c in load_comments() if c["path"] == rel]}
+    m = re.fullmatch(r"chapters/(drafts|final)/ch(\d{4})\.md", rel)
+    if m:
+        out["lint"] = lint_text(text, int(m.group(2)))
+        facts = read_json(ch_path("facts", int(m.group(2)), "json"), None)
+        out["committed"] = bool(facts and facts.get("committed_sha"))
+    return out
+
+
+def studio_write(rel: str, text: str, base_sha: str | None) -> dict:
+    path = studio_path(rel, write=True)
+    if path.exists() and base_sha is not None and sha(read_text(path)) != base_sha:
+        raise StudioError(409, "文件在你打开之后被改过（多半是 Agent 刚写入），请先查看最新版本再改")
+    if path.suffix == ".json":
+        try:
+            json.loads(text)
+        except ValueError as e:
+            raise StudioError(422, f"JSON 格式错误：{e}")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, path)
+    append_jsonl(P["decisions"], [{"at": now(), "kind": "studio-edit", "path": rel, "sha": sha(text)}])
+    out = studio_read(rel)
+    if out.get("committed") and rel.startswith("chapters/final/"):
+        out["notice"] = "已提交章节的定稿被修改：运行 novel-sync 重抽事实，账本才会跟上。"
+    return out
+
+
+def studio_overview() -> dict:
+    p = load_progress()
+    return {"title": ROOT.name, "status": status(), "chapters": studio_chapters(p), "files": studio_files(),
+            "characters": load_characters(),
+            "threads": thread_view(p["last_committed"], style_rules().get("thread_stale_after", 6)),
+            "skeleton": next_skeleton(read_json(P["volumes"], [])), "stamp": studio_stamp()}
+
+
+def serve(host: str, port: int, open_browser: bool) -> None:
+    import threading
+    import webbrowser
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import parse_qs, urlparse
+
+    page = next((c for c in (HARNESS_ROOT / "tools/studio.html", ROOT / "tools/studio.html") if c.exists()), None)
+    if page is None:
+        fail("找不到 tools/studio.html；先运行 `python3 <插件目录>/tools/novel.py upgrade` 刷新工作区")
+    lock = threading.Lock()
+    loopback = host in ("127.0.0.1", "localhost", "::1")
+
+    class Handler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):
+            pass
+
+        def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8") -> None:
+            data = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _guard(self, mutating: bool) -> None:
+            # 防 DNS rebinding：只绑本机时只认本机 Host；写操作要求自定义头，跨站表单与简单请求带不上它
+            hostname = (self.headers.get("Host") or "").rsplit(":", 1)[0].strip("[]")
+            if loopback and hostname not in ("127.0.0.1", "localhost", "::1"):
+                raise StudioError(403, "Host 不被允许")
+            if mutating and self.headers.get("X-Novel-Studio") != "1":
+                raise StudioError(403, "缺少 X-Novel-Studio 请求头")
+
+        def _body(self) -> dict:
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                return json.loads(self.rfile.read(n) or b"{}")
+            except ValueError:
+                raise StudioError(400, "请求体不是 JSON")
+
+        def _dispatch(self, method: str) -> None:
+            try:
+                self._guard(method != "GET")
+                url = urlparse(self.path)
+                q = {k: v[0] for k, v in parse_qs(url.query).items()}
+                if method == "GET":
+                    if url.path in ("/", "/index.html"):
+                        return self._send(200, page.read_bytes(), "text/html; charset=utf-8")
+                    if url.path == "/api/overview":
+                        return self._send(200, studio_overview())
+                    if url.path == "/api/stamp":
+                        return self._send(200, {"stamp": studio_stamp()})
+                    if url.path == "/api/file":
+                        return self._send(200, studio_read(q.get("path", "")))
+                    if url.path == "/api/comments":
+                        rows = load_comments()
+                        if q.get("status"):
+                            rows = [c for c in rows if c.get("status") == q["status"]]
+                        return self._send(200, rows)
+                    raise StudioError(404, "not found")
+                body = self._body()
+                with lock:
+                    if method == "PUT" and url.path == "/api/file":
+                        return self._send(200, studio_write(body.get("path", ""), body.get("text", ""), body.get("sha")))
+                    if method == "POST" and url.path == "/api/comments":
+                        if not (body.get("text") or "").strip():
+                            raise StudioError(422, "批注内容不能为空")
+                        studio_path(body.get("path", ""))
+                        c = add_comment(body["path"], body["text"].strip(), (body.get("quote") or "").strip()[:500])
+                        return self._send(200, steer_comment(c["id"]) if body.get("steer") else c)
+                    if method == "POST" and url.path in ("/api/comments/resolve", "/api/comments/reopen", "/api/comments/steer"):
+                        cid = body.get("id", "")
+                        try:
+                            if url.path.endswith("steer"):
+                                return self._send(200, steer_comment(cid))
+                            if url.path.endswith("resolve"):
+                                return self._send(200, update_comment(cid, status="resolved", resolved_at=now(),
+                                                                      resolution=body.get("note") or "在预览台标记已处理"))
+                            return self._send(200, update_comment(cid, status="open"))
+                        except KeyError:
+                            raise StudioError(404, f"批注 {cid} 不存在")
+                    if method == "POST" and url.path == "/api/steer":
+                        text = (body.get("text") or "").strip()
+                        if not text:
+                            raise StudioError(422, "干预内容不能为空")
+                        p = load_progress()
+                        p.setdefault("steer_queue", []).append({"text": text, "at": now()})
+                        save_progress(p)
+                        return self._send(200, p["steer_queue"])
+                raise StudioError(404, "not found")
+            except StudioError as e:
+                self._send(e.code, {"error": str(e), **e.extra})
+            except Exception as e:   # 预览台不应因为某个坏文件整个挂掉
+                self._send(500, {"error": f"{type(e).__name__}: {e}"})
+
+        def do_GET(self):
+            self._dispatch("GET")
+
+        def do_POST(self):
+            self._dispatch("POST")
+
+        def do_PUT(self):
+            self._dispatch("PUT")
+
+    httpd = None
+    for candidate in ([port] if port == 0 else range(port, port + 20)):
+        try:
+            httpd = ThreadingHTTPServer((host, candidate), Handler)
+            break
+        except OSError:
+            continue
+    if httpd is None:
+        fail(f"端口 {port}–{port + 19} 都被占用，用 --port 指定一个")
+    url = f"http://{'[' + host + ']' if ':' in host else host}:{httpd.server_address[1]}/"
+    print(f"novel studio: {url}  （工作区 {ROOT}，Ctrl+C 停止）", flush=True)
+    if not loopback:
+        print("提示：绑定在非本机地址，同一网络里的人都能查看和修改这个工作区。", flush=True)
+    if open_browser:
+        webbrowser.open(url)
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
 
 
 # ---------------------------------------------------------------- recall
@@ -1740,6 +2040,15 @@ def main(argv: list[str]) -> None:
     s.add_argument("chapter", nargs="?", type=int)
     s.add_argument("step", nargs="?")
     s.add_argument("detail", nargs="?", default="")
+    s = sub.add_parser("comment", help="预览台批注：list [--all] | resolve <id> [说明] | steer <id>")
+    s.add_argument("op", choices=["list", "resolve", "steer"])
+    s.add_argument("id", nargs="?")
+    s.add_argument("note", nargs="?", default="")
+    s.add_argument("--all", action="store_true", help="list 时包含已处理的")
+    s = sub.add_parser("serve", help="启动本地 Web 预览台：看进度、读写产物、批注")
+    s.add_argument("--host", default="127.0.0.1")
+    s.add_argument("--port", type=int, default=8765, help="被占用时向后顺延；0 表示随机空闲端口")
+    s.add_argument("--open", action="store_true", help="启动后打开浏览器")
     sub.add_parser("sync", help="检测被手动修改过的定稿")
     sub.add_parser("reindex", help="重建全文索引")
     a = ap.parse_args(argv)
@@ -1859,6 +2168,21 @@ def main(argv: list[str]) -> None:
             print(f"checkpoint ch{a.chapter:04d} {a.step}")
         else:
             print(json.dumps(last_checkpoints(a.chapter, 20), ensure_ascii=False, indent=1))
+    elif a.cmd == "comment":
+        if a.op == "list":
+            rows = load_comments() if a.all else [c for c in load_comments() if c.get("status") == "open"]
+            print(json.dumps(rows, ensure_ascii=False, indent=1))
+        else:
+            if not a.id:
+                fail(f"用法：comment {a.op} <id>")
+            try:
+                c = steer_comment(a.id) if a.op == "steer" else \
+                    update_comment(a.id, status="resolved", resolved_at=now(), resolution=a.note)
+            except KeyError:
+                fail(f"批注 {a.id} 不存在")
+            print(json.dumps(c, ensure_ascii=False))
+    elif a.cmd == "serve":
+        serve(a.host, a.port, a.open)
     elif a.cmd == "sync":
         print(json.dumps(sync_check(), ensure_ascii=False, indent=1))
     elif a.cmd == "reindex":

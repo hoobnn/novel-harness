@@ -6,9 +6,10 @@
 
 ```
 agents/                    七个角色（插件自动发现，名字带前缀 novel-harness:）
-skills/                    六个入口 skill（/novel-harness:novel-*）；novel-init/scripts/init.sh 负责三种安装方式的自举
+skills/                    七个入口 skill（/novel-harness:novel-*）；novel-init/scripts/init.sh 负责三种安装方式的自举
 hooks/hooks.json           Claude Code 插件钩子 → tools/hooks/post_write.sh
 tools/novel.py             事实层：单文件、仅标准库；init 时复制进工作区
+tools/studio.html          预览台页面（单文件、无外部依赖），由 `novel.py serve` 提供
 tools/hooks/post_write.sh  写入后校验钩子（Claude Code 与 Cursor 共用，根目录从被写文件向上找）
 docs/protocol.md           调度协议（随版本分发）
 docs/schemas.md            数据契约（随版本分发）

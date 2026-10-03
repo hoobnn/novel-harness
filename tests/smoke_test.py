@@ -9,6 +9,7 @@
   5. --standalone 按运行时生成角色与 skill
   6. 只装 skill 时从缓存初始化与升级
   7. 0.1.0 工作区迁移：软链（断链 / 有效）、根目录角色副本、旧协议
+  8. 预览台 serve：读写边界、冲突检查、本机 Host 校验、批注进入上下文包与干预队列
 """
 from __future__ import annotations
 
@@ -47,7 +48,7 @@ def main() -> None:
         # 1. init
         r = run(sys.executable, str(NOVEL), "init", cwd=ws)
         check(r.returncode == 0, f"init 成功: {r.stdout.strip().splitlines()[0] if r.stdout else r.stderr}")
-        for rel in ("state/progress.json", "tools/novel.py", "tools/hooks/post_write.sh", "docs/schemas.md", "docs/protocol.md",
+        for rel in ("state/progress.json", "tools/novel.py", "tools/hooks/post_write.sh", "tools/studio.html", "docs/schemas.md", "docs/protocol.md",
                     "bible/style/voice.md", "bible/style/anti-ai-tone.md", "bible/style/user-rules.md", "bible/style/rules.json",
                     "CLAUDE.md", "AGENTS.md", ".gitignore", ".claude/settings.json", "chapters/drafts", "ledger/cast.json"):
             check((ws / rel).exists(), f"init 产出 {rel}")
@@ -198,9 +199,77 @@ def main() -> None:
                 check((old_plugin / "tools/novel.py").read_text(encoding="utf-8") == "# old", "升级不会顺着软链改写插件目录")
             else:
                 check((ws6 / ".agents/agents/writer.md").exists(), "0.1.0 工作区 init --standalone 生成 Antigravity 角色")
+        # 8. 预览台：在 init 出来的工作区里起服务（端口 0 取随机空闲端口）
+        smoke_studio(ws)
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def smoke_studio(ws: Path) -> None:
+    import re
+    import urllib.error
+    import urllib.request
+
+    e = {k: v for k, v in os.environ.items() if k != "NOVEL_ROOT"}
+    proc = subprocess.Popen([sys.executable, "tools/novel.py", "serve", "--port", "0"], cwd=ws, env=e,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    try:
+        m = re.search(r"http://127\.0\.0\.1:(\d+)/", proc.stdout.readline())
+        check(m is not None, "serve 打印本机地址")
+        base = f"http://127.0.0.1:{m.group(1)}"
+
+        def call(method, path, body=None, headers=None):
+            h = {"X-Novel-Studio": "1", **(headers or {})} if method != "GET" else dict(headers or {})
+            req = urllib.request.Request(base + path, method=method, headers=h,
+                                         data=json.dumps(body).encode() if body is not None else None)
+            try:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as err:
+                return err.code, err.read().decode()
+
+        code, html = call("GET", "/")
+        check(code == 200 and "小说预览台" in html, "GET / 返回预览台页面")
+        code, body = call("GET", "/api/overview")
+        check(code == 200 and json.loads(body)["status"]["route"]["action"] == "architect:foundation", "overview 带 status 与 route")
+        code, _ = call("GET", "/api/overview", headers={"Host": "evil.example"})
+        check(code == 403, "非本机 Host 被拒绝（防 DNS rebinding）")
+        code, _ = call("GET", "/api/file?path=tools/novel.py")
+        check(code == 403, "tools/ 不可读")
+        code, _ = call("PUT", "/api/file", {"path": "ledger/cast.json", "text": "{}"})
+        check(code == 403, "ledger/ 不可写")
+        code, _ = call("PUT", "/api/file", {"path": "bible/world/rules.md", "text": "x"}, headers={"X-Novel-Studio": ""})
+        check(code == 403, "缺自定义请求头的写请求被拒绝")
+        code, _ = call("PUT", "/api/file", {"path": "outline/compass.json", "text": "{bad"})
+        check(code == 422, "JSON 文件格式错误时拒绝保存")
+
+        draft = "chapters/drafts/ch0001.md"
+        _, body = call("GET", f"/api/file?path={draft}")
+        cur = json.loads(body)
+        (ws / draft).write_text(cur["text"] + "外部改动\n", encoding="utf-8")
+        code, _ = call("PUT", "/api/file", {"path": draft, "text": "覆盖", "sha": cur["sha"]})
+        check(code == 409, "文件被别人改过后用旧 sha 保存返回 409")
+        _, body = call("GET", f"/api/file?path={draft}")
+        code, body = call("PUT", "/api/file", {"path": draft, "text": "# 第一章\n\n某种程度上他走了。\n", "sha": json.loads(body)["sha"]})
+        check(code == 200 and json.loads(body)["lint"]["issues"], "保存草稿后返回 lint 结果")
+
+        code, body = call("POST", "/api/comments", {"path": draft, "quote": "他走了", "text": "这里太突然"})
+        cid = json.loads(body)["id"]
+        check(code == 200 and json.loads(body)["chapter"] == 1, "批注按路径归到章节")
+        r = run(sys.executable, "tools/novel.py", "context", "1", "--for", "writer", cwd=ws)
+        check("这里太突然" in r.stdout and cid in r.stdout, "未处理批注进入 writer 上下文包")
+        r = run(sys.executable, "tools/novel.py", "context", "1", "--for", "ledger", cwd=ws)
+        check("这里太突然" not in r.stdout, "ledger 上下文包不带批注")
+        code, _ = call("POST", "/api/comments/steer", {"id": cid})
+        prog = json.loads((ws / "state/progress.json").read_text())
+        check(code == 200 and prog["steer_queue"][-1].get("comment") == cid, "批注交给 Agent 后进入 steer 队列并带 comment id")
+        r = run(sys.executable, "tools/novel.py", "comment", "resolve", cid, "已改", cwd=ws)
+        r2 = run(sys.executable, "tools/novel.py", "context", "1", "--for", "writer", cwd=ws)
+        check(r.returncode == 0 and "这里太突然" not in r2.stdout, "comment resolve 后不再注入上下文")
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
 
 
 if __name__ == "__main__":

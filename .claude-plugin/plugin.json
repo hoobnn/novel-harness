@@ -1,6 +1,6 @@
 {
   "name": "novel-harness",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "长篇小说创作 Agent 团队：架构师、章节规划、正文写作、连续性检查、主编评审、事实账本与盲比裁决，加一个确定性的事实层工具（路由、上下文包、全文检索、时间线、故事线台账、文体统计）。",
   "author": { "name": "hoobnn", "email": "uhoobnn@ikuyu.com" },
   "homepage": "https://github.com/hoobnn/novel-harness",

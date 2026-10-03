@@ -3,7 +3,7 @@
   "owner": { "name": "hoobnn", "email": "uhoobnn@ikuyu.com" },
   "metadata": {
     "description": "在 Claude Code 里写长篇小说的 Agent 团队与事实层工具",
-    "version": "0.2.0"
+    "version": "0.3.0"
   },
   "plugins": [
     {

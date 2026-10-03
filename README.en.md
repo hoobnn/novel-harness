@@ -74,7 +74,7 @@ flowchart LR
 ```
 novel-harness (this repo, install once)  my-novel/ (one folder per novel, created by init)
 ├── agents/      seven roles            ├── CLAUDE.md        entry point to docs/protocol.md
-├── skills/      six /novel-* skills    ├── docs/protocol.md orchestration ┐ copied per version,
+├── skills/      seven /novel-* skills   ├── docs/protocol.md orchestration ┐ copied per version,
 ├── hooks/       post-write checks      ├── docs/schemas.md  data contract │ refreshed by upgrade
 ├── tools/novel.py                      ├── tools/novel.py                 ┘
 ├── docs/        protocol + schemas     ├── bible/ outline/ threads/   canon (written by architect)
@@ -111,7 +111,7 @@ For Cursor, Codex, OpenCode, Antigravity and Pi, or Claude Code without the plug
 npx skills add hoobnn/novel-harness
 ```
 
-This installs the six skills only. The first time you run `novel-init`, `init.sh` notices it isn't inside
+This installs the seven skills only. The first time you run `novel-init`, `init.sh` notices it isn't inside
 the plugin, shallow-clones this repo to `~/.cache/novel-harness/src`, and initializes in standalone mode:
 it generates the seven sub-agent definitions for your runtime, copies the skills, and installs the hooks.
 Later, `python3 tools/novel.py upgrade` refreshes from that cache. Set `NOVEL_HARNESS_SRC` to an existing
@@ -154,7 +154,13 @@ character sheets, plot threads, the first arc's outline and a style guide. Then 
 /novel-harness:novel-steer move the romance up to chapter 4
 /novel-harness:novel-sync                      # rebuild ledgers after editing chapters/final by hand
 /novel-harness:novel-arc-review v1a2           # run or redo an arc / volume review
+/novel-harness:novel-preview                   # open the local web studio
 ```
+
+The studio (`python3 tools/novel.py serve`) is a localhost-only web page. The overview shows chapter progress, the next route
+and thread health, and new agent output shows up within seconds. You can edit the bible, outline, plans, drafts and finals
+in the browser; saves check for conflicts, so an older copy never overwrites something an agent just wrote. Select text to leave a comment:
+open comments go into that chapter's context pack, and "hand to agent" turns one into a steer item handled first next round.
 
 Make the workspace a git repo. The main session runs `git commit` after each chapter, so every change is traceable.
 

@@ -1,0 +1,934 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>小说预览台</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%23b23a2a'/%3E%3Ctext x='16' y='23' font-size='19' text-anchor='middle' fill='white'%3E稿%3C/text%3E%3C/svg%3E">
+<style>
+/* 视觉母题：稿纸与朱批。左侧是深黛青的「书脊」，中间是纸，右侧是朱红楷体批注栏；正文被批处用圈点（text-emphasis）标出。 */
+:root {
+  --paper: #f4f3ef; --sheet: #fcfbf8; --sunk: #ebe9e3; --line: #dfdcd3; --line-strong: #c9c4b8;
+  --ink: #23262a; --ink-2: #555a60; --ink-3: #8b8f93;
+  --spine: #1f2b33; --spine-2: #283741; --spine-line: #33444f; --spine-ink: #d5dde2; --spine-dim: #8596a2; --spine-faint: #5d6f7b;
+  --dai: #2e5a6b; --dai-soft: #dde8ec;
+  --zhu: #b2342a; --zhu-ink: #9c2c23; --zhu-soft: #f6e4e0; --zhu-wash: #fbf1ee;
+  --ok: #43795a; --ok-soft: #e0ede5; --warn: #a2711c; --warn-soft: #f5ebd6; --bad: #b2342a; --bad-soft: #f6e4e0;
+  --info: #2e5a6b; --info-soft: #dde8ec; --violet: #6a548f; --violet-soft: #e9e4f2; --teal: #2f6e6a; --teal-soft: #dbecea;
+  --shadow: 0 1px 2px rgba(31, 43, 51, .06), 0 6px 20px rgba(31, 43, 51, .06);
+  --ui: -apple-system, BlinkMacSystemFont, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+  --prose: "Songti SC", "Noto Serif CJK SC", "Source Han Serif SC", "STSong", "SimSun", serif;
+  --kai: "Kaiti SC", "STKaiti", "KaiTi", "BiauKai", "Songti SC", serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --spine-w: 268px; --side-w: 336px; --top-h: 64px;
+  --col: 1040px;   /* 文档页的内容列：页头、提示条与正文对齐在这条居中的列里 */
+  --gut: max(36px, calc((100% - var(--col)) / 2));
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper: #1c1f21; --sheet: #222527; --sunk: #272a2d; --line: #33373a; --line-strong: #464b4f;
+    --ink: #e6e3dc; --ink-2: #b3b0a8; --ink-3: #7f7d77;
+    --spine: #0e1317; --spine-2: #172027; --spine-line: #222e36; --spine-ink: #d5dde2; --spine-dim: #7f909b; --spine-faint: #4f606b;
+    --dai: #8fbccc; --dai-soft: #1f3038;
+    --zhu: #e2786b; --zhu-ink: #ec9286; --zhu-soft: #3a2421; --zhu-wash: #241c1b;
+    --ok: #82bf98; --ok-soft: #1f3128; --warn: #dcaa55; --warn-soft: #362c19; --bad: #e2786b; --bad-soft: #3a2421;
+    --info: #8fbccc; --info-soft: #1f3038; --violet: #b39ddb; --violet-soft: #2b2538; --teal: #7cc4bd; --teal-soft: #1a302e;
+    --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+  }
+}
+:root[data-theme="dark"] {
+  --paper: #1c1f21; --sheet: #222527; --sunk: #272a2d; --line: #33373a; --line-strong: #464b4f;
+  --ink: #e6e3dc; --ink-2: #b3b0a8; --ink-3: #7f7d77;
+  --spine: #0e1317; --spine-2: #172027; --spine-line: #222e36; --spine-ink: #d5dde2; --spine-dim: #7f909b; --spine-faint: #4f606b;
+  --dai: #8fbccc; --dai-soft: #1f3038;
+  --zhu: #e2786b; --zhu-ink: #ec9286; --zhu-soft: #3a2421; --zhu-wash: #241c1b;
+  --ok: #82bf98; --ok-soft: #1f3128; --warn: #dcaa55; --warn-soft: #362c19; --bad: #e2786b; --bad-soft: #3a2421;
+  --info: #8fbccc; --info-soft: #1f3038; --violet: #b39ddb; --violet-soft: #2b2538; --teal: #7cc4bd; --teal-soft: #1a302e;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .3), 0 6px 20px rgba(0, 0, 0, .25);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body { background: var(--paper); color: var(--ink); font: 14px/1.6 var(--ui); -webkit-font-smoothing: antialiased; }
+a { color: inherit; text-decoration: none; }
+button, textarea, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--dai); outline-offset: 2px; }
+button { cursor: pointer; border: 1px solid var(--line-strong); background: var(--sheet); border-radius: 6px; padding: 5px 12px; transition: border-color .15s, background .15s; }
+button:hover { border-color: var(--ink-3); }
+button.primary { background: var(--ink); border-color: var(--ink); color: var(--sheet); }
+button.primary:hover { background: var(--dai); border-color: var(--dai); }
+button.zhu { background: var(--zhu); border-color: var(--zhu); color: #fff; }
+button.zhu:hover { filter: brightness(1.08); }
+button.ghost { border-color: transparent; background: transparent; color: var(--ink-2); }
+button.ghost:hover { background: var(--sunk); }
+button.link { border: 0; background: none; padding: 0; color: var(--ink-3); font-size: 12px; }
+button.link:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+button:disabled { opacity: .5; cursor: default; }
+textarea, input[type=text] { width: 100%; background: var(--sheet); border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; }
+textarea:focus, input:focus { outline: none; border-color: var(--dai); box-shadow: 0 0 0 3px var(--dai-soft); }
+
+.app { display: grid; grid-template-columns: var(--spine-w) minmax(0, 1fr); grid-template-rows: var(--top-h) minmax(0, 1fr); height: 100vh; }
+
+/* ---------------- 顶栏：左段与书脊连成一体，右段是当前章的工序条 */
+header.top { grid-column: 1 / -1; display: grid; grid-template-columns: var(--spine-w) minmax(0, 1fr) auto; align-items: stretch; background: var(--sheet); border-bottom: 1px solid var(--line); }
+.brand { background: var(--spine); color: var(--spine-ink); display: flex; align-items: center; gap: 12px; padding: 0 18px; min-width: 0; border-bottom: 1px solid var(--spine-line); }
+.brand .seal { flex: none; width: 34px; height: 34px; border-radius: 6px; background: var(--zhu); color: #fff; display: grid; place-items: center; font: 700 17px/1 var(--prose); box-shadow: inset 0 0 0 2px rgba(255,255,255,.18); }
+.brand .bk { min-width: 0; }
+.brand .bk b { display: block; font: 700 17px/1.25 var(--prose); letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brand .bk span { display: block; font-size: 12px; color: var(--spine-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flow { display: flex; align-items: center; gap: 22px; padding: 0 24px; min-width: 0; }
+.flow .now { min-width: 0; display: flex; flex-direction: column; justify-content: center; }
+.flow .now small { font-size: 12px; color: var(--ink-3); }
+.flow .now b { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.flow .now b.blocked { color: var(--bad); }
+.steps-bar { display: flex; align-items: center; flex: none; }
+.steps-bar a { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-3); padding: 4px 0; white-space: nowrap; }
+.steps-bar a i { width: 18px; height: 18px; border-radius: 50%; border: 1.5px solid var(--line-strong); display: grid; place-items: center; font-style: normal; font-size: 10px; background: var(--sheet); }
+.steps-bar a.done { color: var(--ink-2); }
+.steps-bar a.done i { background: var(--dai); border-color: var(--dai); color: var(--sheet); }
+.steps-bar a.cur { color: var(--ink); font-weight: 600; }
+.steps-bar a.cur i { border-color: var(--zhu); box-shadow: 0 0 0 3px var(--zhu-soft); }
+.steps-bar a.cur i::after { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--zhu); }
+.steps-bar .sep { width: 18px; height: 1.5px; background: var(--line-strong); margin: 0 6px; }
+.steps-bar .sep.done { background: var(--dai); }
+.top-end { display: flex; align-items: center; gap: 14px; padding: 0 20px; }
+.live { display: flex; align-items: center; gap: 7px; color: var(--ink-3); font-size: 12px; white-space: nowrap; }
+.live i { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.live.off i { background: var(--bad); box-shadow: 0 0 0 3px var(--bad-soft); }
+.live.flash i { animation: pulse .9s ease-out; }
+@keyframes pulse { from { box-shadow: 0 0 0 9px transparent, 0 0 0 3px var(--ok-soft); } to { box-shadow: 0 0 0 3px var(--ok-soft); } }
+.menu-btn { display: none; background: none; border: 0; color: var(--spine-ink); font-size: 18px; padding: 4px 6px; }
+
+/* ---------------- 书脊（左栏） */
+nav.side { background: var(--spine); color: var(--spine-ink); overflow-y: auto; padding: 14px 0 48px 12px; scrollbar-width: thin; scrollbar-color: var(--spine-line) transparent; }
+.nav-group { margin-bottom: 18px; }
+.nav-title { font-size: 12px; color: var(--spine-faint); padding: 6px 14px 6px 10px; display: flex; justify-content: space-between; align-items: baseline; letter-spacing: .04em; }
+.nav-title b { font-weight: 500; color: var(--spine-dim); }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 7px 14px 7px 10px; border-radius: 7px 0 0 7px; color: var(--spine-dim); cursor: pointer; position: relative; transition: background .12s, color .12s; }
+.nav-item:hover { background: var(--spine-2); color: var(--spine-ink); }
+.nav-item.active { background: var(--paper); color: var(--ink); }
+.nav-item.active::before, .nav-item.active::after { content: ""; position: absolute; right: 0; width: 10px; height: 10px; pointer-events: none; }
+.nav-item.active::before { top: -10px; background: radial-gradient(circle at 0 0, transparent 9.5px, var(--paper) 10px); }
+.nav-item.active::after { bottom: -10px; background: radial-gradient(circle at 0 100%, transparent 9.5px, var(--paper) 10px); }
+.nav-item svg { width: 16px; height: 16px; flex: none; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; opacity: .9; }
+.nav-item .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.nav-item .count { font-size: 12px; color: var(--spine-faint); font-variant-numeric: tabular-nums; }
+.nav-item.active .count { color: var(--ink-3); }
+.nav-item .hot { min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--zhu); color: #fff; font-size: 11px; display: grid; place-items: center; font-variant-numeric: tabular-nums; }
+.nav-item .tag { font-size: 11px; color: var(--zhu); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; line-height: 16px; }
+.toc-vol { font: 600 13.5px/1.4 var(--prose); color: var(--spine-ink); padding: 10px 14px 4px 10px; letter-spacing: .04em; }
+.toc-arc { font-size: 12px; color: var(--spine-faint); padding: 6px 14px 3px 10px; display: flex; gap: 8px; align-items: center; }
+.toc-arc::after { content: ""; flex: 1; height: 1px; background: var(--spine-line); }
+.toc-ch { padding-left: 12px; }
+.toc-ch .no { width: 2.2em; flex: none; font-size: 12px; color: var(--spine-faint); font-variant-numeric: tabular-nums; text-align: right; }
+.toc-ch.active .no { color: var(--ink-3); }
+.toc-ch .bar { width: 3px; height: 16px; border-radius: 2px; flex: none; background: var(--spine-line); }
+.toc-ch .bar.plan { background: #6f93a6; } .toc-ch .bar.draft { background: #c9a35a; } .toc-ch .bar.review { background: #9a86c2; }
+.toc-ch .bar.ledger, .toc-ch .bar.commit { background: #6fb0aa; } .toc-ch .bar.committed { background: #79b08d; }
+.toc-ch .title { font-family: var(--prose); font-size: 14px; }
+.toc-skel { padding: 4px 14px 4px 22px; font-size: 12px; color: var(--spine-faint); }
+.lib-group { padding: 6px 14px 2px 10px; font-size: 12px; color: var(--spine-faint); }
+.lib-item { padding-left: 20px; }
+.lib-item .grow { font-size: 13.5px; }
+
+/* ---------------- 主区 */
+main { overflow-y: auto; position: relative; background: var(--paper); }
+.page { padding: 28px 36px 80px; max-width: 1180px; margin: 0 auto; }
+.page h1 { font-family: var(--prose); font-size: 26px; margin: 0 0 4px; letter-spacing: .04em; }
+.sub { color: var(--ink-3); margin-bottom: 22px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-bottom: 20px; }
+.card { background: var(--sheet); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.card .k { font-size: 12px; color: var(--ink-3); }
+.card .v { font-size: 22px; font-weight: 600; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.card .v small { font-size: 12px; font-weight: 400; color: var(--ink-3); margin-left: 4px; }
+.card .d { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+.section { background: var(--sheet); border: 1px solid var(--line); border-radius: 10px; padding: 16px 18px; margin-bottom: 16px; }
+.section h2 { font-size: 14px; margin: 0 0 12px; display: flex; align-items: center; gap: 8px; }
+.section h2 .hint { font-weight: 400; color: var(--ink-3); font-size: 12px; }
+.alerts { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.alert { border-radius: 8px; padding: 10px 14px; border: 1px solid; }
+.alert.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.alert.bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.alert.info { background: var(--info-soft); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
+.strip-arc { margin-bottom: 12px; }
+.strip-arc .lbl { font-size: 12px; color: var(--ink-2); margin-bottom: 6px; }
+.strip { display: flex; flex-wrap: wrap; gap: 4px; }
+.cell { width: 30px; height: 30px; border-radius: 5px; display: grid; place-items: center; font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; background: var(--sunk); color: var(--ink-3); border: 1px solid transparent; position: relative; }
+.cell.plan { background: var(--info-soft); color: var(--info); } .cell.draft { background: var(--warn-soft); color: var(--warn); }
+.cell.review { background: var(--violet-soft); color: var(--violet); } .cell.ledger, .cell.commit { background: var(--teal-soft); color: var(--teal); }
+.cell.committed { background: var(--ok-soft); color: var(--ok); }
+.cell.current { border-color: var(--zhu); }
+.cell .badge { position: absolute; top: -4px; right: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--zhu); border: 2px solid var(--sheet); }
+.legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 12px; color: var(--ink-3); margin-top: 8px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--line-strong); display: inline-block; }
+.dot.plan { background: var(--info); } .dot.draft { background: var(--warn); } .dot.review { background: var(--violet); }
+.dot.ledger, .dot.commit { background: var(--teal); } .dot.committed { background: var(--ok); }
+.pill { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--sunk); color: var(--ink-2); white-space: nowrap; }
+.pill.ok { background: var(--ok-soft); color: var(--ok); } .pill.warn { background: var(--warn-soft); color: var(--warn); }
+.pill.bad { background: var(--bad-soft); color: var(--bad); } .pill.info { background: var(--info-soft); color: var(--info); }
+.pill.violet { background: var(--violet-soft); color: var(--violet); } .pill.teal { background: var(--teal-soft); color: var(--teal); }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { text-align: left; font-weight: 500; color: var(--ink-3); font-size: 12px; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.grid td { padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+table.grid tr.click { cursor: pointer; }
+table.grid tr.click:hover td { background: var(--sunk); }
+.muted { color: var(--ink-3); }
+.mono { font-family: var(--mono); font-size: 12px; }
+.steps li { margin-bottom: 4px; }
+.duo { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 16px; align-items: start; }
+ul.plain { list-style: none; margin: 0; padding: 0; }
+
+/* ---------------- 文件与章节 */
+.doc { display: grid; grid-template-columns: minmax(0, 1fr) var(--side-w); height: 100%; min-width: 0; }
+.doc-main { overflow-y: auto; }
+.doc-head { position: sticky; top: 0; z-index: 5; background: color-mix(in srgb, var(--paper) 90%, transparent); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line); padding: 14px var(--gut) 0; }
+.doc-head .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-height: 34px; }
+.doc-head .ttl { font-family: var(--prose); font-size: 20px; font-weight: 700; letter-spacing: .04em; }
+.doc-head .pager { display: flex; gap: 2px; }
+.doc-head .pager a { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 6px; color: var(--ink-3); }
+.doc-head .pager a:hover { background: var(--sunk); color: var(--ink); }
+.doc-head .pager a.off { opacity: .3; pointer-events: none; }
+.doc-head .spacer { flex: 1; }
+.doc-head .path { font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+.doc-head .row2 { display: flex; align-items: flex-end; gap: 12px; margin-top: 8px; }
+.doc-head.file { padding-bottom: 12px; }
+.tabs { display: flex; gap: 22px; }
+.tabs a { padding: 6px 0 9px; color: var(--ink-3); font-size: 13.5px; border-bottom: 2px solid transparent; }
+.tabs a:hover { color: var(--ink); }
+.tabs a.on { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.tabs a.off { opacity: .35; pointer-events: none; }
+.tabs a .n { font-size: 11px; color: var(--zhu); margin-left: 3px; }
+.banner { margin: 14px var(--gut) 0; }
+.lint { margin: 14px var(--gut) 0; font-size: 13px; }
+.lint details { background: var(--sheet); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+.lint summary { cursor: pointer; }
+.lint ul { margin: 6px 0 0; padding-left: 20px; }
+.body { padding: 28px 36px 120px; }
+.prose { font-family: var(--prose); font-size: 17.5px; line-height: 2.05; max-width: 38em; margin: 0 auto; }
+.prose p { margin: 0 0 1em; text-indent: 2em; }
+.prose h1 { font-size: 25px; text-align: center; margin: 12px 0 36px; text-indent: 0; letter-spacing: .12em; }
+.prose h2, .prose h3 { text-indent: 0; }
+.md { max-width: 52em; margin: 0 auto; font-size: 15px; line-height: 1.8; }
+.md h1 { font-family: var(--prose); font-size: 22px; } .md h2 { font-size: 17px; margin-top: 1.6em; border-bottom: 1px solid var(--line); padding-bottom: 4px; } .md h3 { font-size: 15px; }
+.md table { border-collapse: collapse; margin: 8px 0 16px; font-size: 13px; display: block; overflow-x: auto; }
+.md th, .md td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.md th { background: var(--sunk); font-weight: 500; }
+.md blockquote { margin: 8px 0; padding: 4px 14px; border-left: 3px solid var(--line-strong); color: var(--ink-2); }
+.md code { font-family: var(--mono); font-size: .88em; background: var(--sunk); padding: 1px 4px; border-radius: 4px; }
+.md pre { background: var(--sunk); padding: 10px 12px; border-radius: 8px; overflow-x: auto; }
+.md pre code { background: none; padding: 0; }
+.md hr { border: 0; border-top: 1px solid var(--line); margin: 20px 0; }
+pre.json { font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; max-width: 60em; margin: 0 auto; }
+pre.json .k { color: var(--info); } pre.json .s { color: var(--ok); } pre.json .n { color: var(--violet); }
+/* 圈点：被批注的原文用着重号标出，像朱笔在字旁加圈 */
+mark.hl { background: var(--zhu-wash); color: inherit; cursor: pointer; padding: 0 1px; border-radius: 2px;
+  -webkit-text-emphasis: circle var(--zhu); text-emphasis: circle var(--zhu); -webkit-text-emphasis-position: under; text-emphasis-position: under right; }
+mark.hl.active { background: var(--zhu-soft); }
+mark.hl.resolved { background: transparent; -webkit-text-emphasis-color: var(--line-strong); text-emphasis-color: var(--line-strong); }
+.editor { width: 100%; min-height: calc(100vh - 230px); resize: vertical; font-family: var(--prose); font-size: 16.5px; line-height: 1.95; padding: 22px 26px; max-width: 46em; display: block; margin: 0 auto; }
+.editor.code { font-family: var(--mono); font-size: 13px; line-height: 1.6; max-width: none; }
+.review-head { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+.verdict { font-size: 22px; font-weight: 700; font-family: var(--prose); }
+.scores { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px 16px; margin-bottom: 16px; }
+.score .bar { height: 6px; background: var(--sunk); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+.score .bar i { display: block; height: 100%; background: var(--dai); }
+.issue { border: 1px solid var(--line); border-left-width: 3px; border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; background: var(--sheet); }
+.issue.critical { border-left-color: var(--bad); } .issue.error { border-left-color: var(--warn); } .issue.warning { border-left-color: var(--info); }
+.issue .ev { font-family: var(--prose); color: var(--ink-2); margin: 4px 0; padding-left: 10px; border-left: 2px solid var(--line); }
+
+/* ---------------- 朱批栏（右栏） */
+.doc-side { background: var(--sheet); border-left: 1px solid var(--line); overflow-y: auto; display: flex; flex-direction: column; position: relative; }
+.doc-side::before { content: ""; position: absolute; left: 22px; top: 0; bottom: 0; width: 1px; background: var(--zhu-soft); }
+.side-head { padding: 18px 20px 12px 36px; display: flex; align-items: baseline; gap: 10px; position: relative; }
+.side-head h3 { margin: 0; font: 700 18px/1 var(--kai); color: var(--zhu-ink); letter-spacing: .1em; }
+.side-head .stat { font-size: 12px; color: var(--ink-3); }
+.side-head .filter { margin-left: auto; display: flex; gap: 2px; background: var(--sunk); border-radius: 6px; padding: 2px; }
+.side-head .filter button { border: 0; background: none; font-size: 12px; padding: 2px 8px; border-radius: 4px; color: var(--ink-3); }
+.side-head .filter button.on { background: var(--sheet); color: var(--ink); box-shadow: var(--shadow); }
+.composer { margin: 0 16px 14px 36px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; position: relative; transition: border-color .15s, box-shadow .15s; }
+.composer:focus-within { border-color: color-mix(in srgb, var(--zhu) 45%, var(--line)); box-shadow: 0 0 0 3px var(--zhu-wash); }
+.composer textarea { border: 0; background: transparent; padding: 2px 0; resize: none; font: 15px/1.7 var(--kai); color: var(--zhu-ink); min-height: 3.6em; }
+.composer textarea:focus { box-shadow: none; }
+.composer textarea::placeholder { color: var(--ink-3); font-family: var(--ui); font-size: 13px; }
+.composer .hint { font-size: 12px; color: var(--ink-3); margin-bottom: 6px; }
+.composer .quote { font: 13.5px/1.7 var(--prose); color: var(--ink-2); padding: 2px 0 6px 10px; border-left: 2px solid var(--zhu); margin-bottom: 6px; max-height: 5.2em; overflow: hidden; position: relative; }
+.composer .quote button { position: absolute; right: 0; top: 0; }
+.composer .foot { display: flex; align-items: center; gap: 8px; border-top: 1px dashed var(--line); margin-top: 6px; padding-top: 8px; }
+.composer .foot label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); cursor: pointer; flex: 1; }
+.composer .foot input { accent-color: var(--zhu); margin: 0; }
+.notes { padding: 0 16px 40px 0; }
+.cm { position: relative; padding: 12px 4px 14px 36px; border-top: 1px solid var(--line); transition: background .15s; }
+.cm::before { content: ""; position: absolute; left: 18px; top: 18px; width: 9px; height: 9px; border-radius: 50%; background: var(--sheet); border: 2px solid var(--zhu); }
+.cm.resolved::before { border-color: var(--line-strong); background: var(--line-strong); }
+.cm:hover, .cm.active { background: var(--zhu-wash); }
+.cm .meta { display: flex; gap: 8px; align-items: center; font-size: 11.5px; color: var(--ink-3); margin-bottom: 6px; flex-wrap: wrap; }
+.cm .meta .who { color: var(--ink-2); }
+.cm .quote { font: 13px/1.7 var(--prose); color: var(--ink-3); margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.cm .quote::before { content: "「"; } .cm .quote::after { content: "」"; }
+.cm .text { font: 15.5px/1.75 var(--kai); color: var(--zhu-ink); white-space: pre-wrap; }
+.cm.resolved .text { color: var(--ink-2); }
+.cm .res { font-size: 12.5px; color: var(--ok); margin-top: 6px; padding-left: 10px; border-left: 2px solid var(--ok-soft); }
+.cm .acts { display: flex; gap: 14px; margin-top: 8px; }
+.cm .stamp { position: absolute; right: 10px; top: 12px; font: 700 12px/1 var(--kai); color: var(--zhu); border: 1.5px solid var(--zhu); border-radius: 3px; padding: 3px 4px; transform: rotate(-8deg); opacity: .75; letter-spacing: .1em; }
+.cm .agent { font-size: 11px; color: var(--violet); background: var(--violet-soft); padding: 0 6px; border-radius: 4px; }
+.side-empty { padding: 28px 20px 0 36px; color: var(--ink-3); font-size: 13px; line-height: 1.8; }
+.side-empty b { display: block; font: 16px/1.6 var(--kai); color: var(--zhu-ink); margin-bottom: 4px; font-weight: 400; }
+
+/* 列表页里的批注卡沿用同一套样式，只是放在 section 里 */
+.section .cm { border-top: 1px solid var(--line); }
+.section .cm:first-of-type { border-top: 0; }
+
+#selbtn { position: fixed; z-index: 50; display: none; background: var(--zhu); color: #fff; border: 0; border-radius: 6px; padding: 5px 11px; font: 13px var(--kai); box-shadow: var(--shadow); }
+#toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--sheet); padding: 9px 16px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 60; max-width: 80vw; }
+#toast.show { opacity: 1; }
+#toast.err { background: var(--bad); color: #fff; }
+.empty { color: var(--ink-3); text-align: center; padding: 60px 0; }
+
+/* 宽屏：书脊、朱批栏、正文字号与行宽一起放大，避免正文缩成中间一窄条 */
+@media (min-width: 1680px) {
+  :root { --spine-w: 296px; --side-w: 392px; --col: 1120px; --top-h: 68px; }
+  .page { max-width: 1400px; }
+  .duo { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+  .prose { font-size: 19px; max-width: 40em; }
+  .md { font-size: 16px; }
+  .cm .text { font-size: 16.5px; }
+  .composer textarea { font-size: 16px; }
+  .brand .bk b { font-size: 18px; }
+}
+@media (min-width: 2200px) {
+  :root { --spine-w: 320px; --side-w: 440px; --col: 1240px; --top-h: 72px; }
+  body { font-size: 15px; }
+  .page { max-width: 1600px; }
+  .prose { font-size: 21px; max-width: 40em; }
+  .md { font-size: 17px; max-width: 56em; }
+  .doc-head .ttl { font-size: 23px; }
+  .toc-ch .title { font-size: 15px; }
+  .cm .text { font-size: 17.5px; }
+  .cards { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+@media (max-width: 1180px) { .steps-bar a span { display: none; } .steps-bar .sep { width: 12px; margin: 0 4px; } }
+@media (max-width: 1000px) {
+  .doc { grid-template-columns: minmax(0, 1fr); height: auto; }
+  .doc-main { overflow: visible; }
+  .doc-side { border-left: 0; border-top: 1px solid var(--line); }
+  .steps-bar { display: none; }
+}
+@media (max-width: 760px) {
+  :root { --top-h: 56px; }
+  .app { grid-template-columns: minmax(0, 1fr); }
+  header.top { grid-template-columns: minmax(0, 1fr) auto; }
+  .brand { padding: 0 12px; gap: 8px; }
+  .brand .seal { display: none; }
+  .flow { display: none; }
+  .top-end { background: var(--spine); padding: 0 14px; }
+  .live { color: var(--spine-dim); } .live span { display: none; }
+  .menu-btn { display: inline-block; }
+  nav.side { position: fixed; inset: var(--top-h) 0 0 0; z-index: 40; display: none; padding-right: 12px; }
+  nav.side .nav-item { border-radius: 7px; }
+  nav.side .nav-item.active::before, nav.side .nav-item.active::after { display: none; }
+  body.nav-open nav.side { display: block; }
+  .page, .body { padding-left: 16px; padding-right: 16px; }
+  :root { --gut: 16px; }
+  .doc-head .path { display: none; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="brand" id="brand"><div class="bk"><b>小说预览台</b></div></div>
+    <div class="flow" id="flow"></div>
+    <div class="top-end"><div class="live" id="live" title="每隔几秒检查一次工作区变动"><i></i><span>实时同步</span></div></div>
+  </header>
+  <nav class="side" id="nav"></nav>
+  <main id="main"><div class="empty">加载中…</div></main>
+</div>
+<button id="selbtn">朱批</button>
+<div id="toast"></div>
+
+<script>
+"use strict";
+const S = { sideFilter: "open", ov: null, stamp: 0, file: null, editing: false, dirty: false, pendingQuote: "", activeCid: null, staleOnDisk: false };
+const $ = (sel, el = document) => el.querySelector(sel);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const pad = n => String(n).padStart(4, "0");
+
+const STAGE = {
+  outline: ["待计划", ""], plan: ["已计划", "info"], draft: ["草稿", "warn"], review: ["评审中", "violet"],
+  ledger: ["待抽事实", "teal"], commit: ["待提交", "teal"], committed: ["已提交", "ok"],
+};
+const ACTION = {
+  "architect:foundation": "搭建基础设定", "architect:expand-arc": "展开下一弧", "architect:new-volume": "规划新卷",
+  "architect:finale-check": "确认收官", planner: "写章节计划", writer: "写草稿", "checker+editor": "检查与评审",
+  "writer:revise": "按评审修订", finalize: "定稿", ledger: "抽取事实", commit: "提交", "editor:arc-review": "弧级评审",
+  "editor:volume-review": "卷级评审", revise: "返工已提交章节", steer: "处理用户干预", blocked: "卡住：需要你决定", done: "全书完结",
+};
+const PHASE = { init: "初始化", foundation: "设定阶段", writing: "写作中", complete: "已完结" };
+const VERDICT = { accept: ["通过", "ok"], polish: ["需润色", "warn"], rewrite: ["需重写", "bad"] };
+const KIND = { plans: ["计划", "md"], drafts: ["草稿", "md"], final: ["定稿", "md"], reviews: ["评审", "json"], check: ["连续性", "json"], facts: ["事实", "json"] };
+
+// ------------------------------------------------------------------ api
+async function api(path, opts = {}) {
+  const init = { method: opts.method || "GET", headers: {} };
+  if (opts.body !== undefined) {
+    init.body = JSON.stringify(opts.body);
+    init.headers["Content-Type"] = "application/json";
+  }
+  if (init.method !== "GET") init.headers["X-Novel-Studio"] = "1";
+  const r = await fetch(path, init);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(data.error || r.statusText); e.status = r.status; e.data = data; throw e; }
+  return data;
+}
+function toast(msg, err = false) {
+  const t = $("#toast");
+  t.textContent = msg; t.className = "show" + (err ? " err" : "");
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.className = "", err ? 4200 : 2200);
+}
+
+// ------------------------------------------------------------------ markdown（够用的子集：标题、段落、列表、表格、引用、代码、分隔线）
+function inline(s) {
+  return esc(s)
+    .replace(/`([^`]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>");
+}
+function md(src) {
+  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  const out = []; let i = 0;
+  const isTableSep = l => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l);
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) {
+      const buf = []; i++;
+      while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+      i++; out.push(`<pre><code>${esc(buf.join("\n"))}</code></pre>`); continue;
+    }
+    let m;
+    if ((m = l.match(/^(#{1,6})\s+(.*)$/))) { out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`); i++; continue; }
+    if (/^\s*(-{3,}|\*{3,})\s*$/.test(l)) { out.push("<hr>"); i++; continue; }
+    if (/^\s*\|/.test(l) && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      const head = cells(l); i += 2; const rows = [];
+      while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(cells(lines[i++]));
+      out.push(`<table><thead><tr>${head.map(c => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${r.map(c => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table>`);
+      continue;
+    }
+    if (/^\s*>/.test(l)) {
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, ""));
+      out.push(`<blockquote>${md(buf.join("\n"))}</blockquote>`); continue;
+    }
+    if (/^\s*([-*+]|\d+[.)])\s+/.test(l)) {
+      const ordered = /^\s*\d/.test(l); const items = [];
+      while (i < lines.length && /^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*+]|\d+[.)])\s+/, ""));
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag}>${items.map(x => `<li>${inline(x)}</li>`).join("")}</${tag}>`); continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const buf = [];
+    while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|```|\s*>|\s*\|)/.test(lines[i]) && !/^\s*([-*+]|\d+[.)])\s+/.test(lines[i])) buf.push(lines[i++]);
+    out.push(`<p>${buf.map(inline).join("<br>")}</p>`);
+  }
+  return out.join("\n");
+}
+function jsonView(text) {
+  let pretty;
+  try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch { pretty = text; }
+  return `<pre class="json">${esc(pretty)
+    .replace(/(&quot;(?:[^&]|&(?!quot;))*?&quot;)(\s*:)/g, '<span class="k">$1</span>$2')
+    .replace(/(:\s*|\[\s*|,\s*)(&quot;(?:[^&]|&(?!quot;))*?&quot;)/g, '$1<span class="s">$2</span>')
+    .replace(/(:\s*)(-?\d+(?:\.\d+)?|true|false|null)/g, '$1<span class="n">$2</span>')}</pre>`;
+}
+function jsonlView(text) {
+  return jsonView("[" + text.trim().split("\n").filter(Boolean).join(",") + "]");
+}
+
+// ------------------------------------------------------------------ data
+async function loadOverview() {
+  S.ov = await api("/api/overview");
+  S.stamp = S.ov.stamp;
+  renderHeader(); renderNav();
+}
+function chapterRow(n) { return S.ov.chapters.find(c => c.chapter === n); }
+
+// ------------------------------------------------------------------ header / nav
+const ICON = {
+  dash: '<svg viewBox="0 0 16 16"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>',
+  outline: '<svg viewBox="0 0 16 16"><path d="M3 3.5h10M5.5 8h7.5M5.5 12.5h7.5M3 8h.01M3 12.5h.01"/></svg>',
+  threads: '<svg viewBox="0 0 16 16"><path d="M2 4c4 0 4 8 12 8M2 12c4 0 4-8 12-8"/></svg>',
+  notes: '<svg viewBox="0 0 16 16"><path d="M10.5 2.5l3 3-7 7H3.5v-3z"/><path d="M9 4l3 3"/></svg>',
+};
+const STEPS = [["plans", "计划"], ["drafts", "草稿"], ["reviews", "评审"], ["final", "定稿"], ["facts", "事实"], ["commit", "提交"]];
+const LIB_NAME = {
+  "bible/premise.md": "故事前提", "bible/characters.json": "人物索引", "bible/world/rules.md": "世界规则", "bible/world/calendar.md": "日历",
+  "bible/world/geography.md": "地理与行程", "bible/world/factions.md": "势力", "bible/style/voice.md": "文风标准",
+  "bible/style/anti-ai-tone.md": "去 AI 味判据", "bible/style/user-rules.md": "我的偏好", "bible/style/rules.json": "机械规则",
+  "bible/style/samples.md": "文风样张", "outline/volumes.json": "分卷大纲", "outline/compass.json": "指南针", "threads/registry.json": "故事线登记",
+};
+const LIB_GROUPS = [["故事", /^bible\/premise/], ["人物", /^bible\/characters/], ["世界", /^bible\/world\//], ["文风", /^bible\/style\//],
+  ["大纲", /^(outline|threads)\//], ["摘要", /^summaries\//], ["其他", /./]];
+function libName(f) {
+  if (LIB_NAME[f]) return LIB_NAME[f];
+  let m;
+  if ((m = f.match(/^bible\/characters\/(.+)\.md$/))) return (S.ov.characters || []).find(c => c.slug === m[1])?.name || m[1];
+  if ((m = f.match(/^summaries\/arcs\/v(\d+)a(\d+)\.json$/))) return `卷${m[1]}弧${m[2]} 摘要`;
+  if ((m = f.match(/^summaries\/volumes\/v(\d+)\.json$/))) return `卷${m[1]} 摘要`;
+  return f.split("/").pop().replace(/\.\w+$/, "");
+}
+function pipeline(n) {
+  const c = chapterRow(n);
+  if (!c) return "";
+  const done = STEPS.map(([k]) => k === "commit" ? c.stage === "committed" : c.files[k]);
+  // 评审没通过时回到草稿修订：高亮草稿，评审之后的工序都还没开始
+  const revising = c.stage === "review" && c.verdict && c.verdict !== "accept";
+  const cur = revising ? 1 : done.indexOf(false);
+  if (revising) for (let i = 1; i < done.length; i++) done[i] = false;
+  return `<div class="steps-bar" title="第 ${n} 章的工序">${STEPS.map(([k, l], i) =>
+    `${i ? `<span class="sep ${done[i - 1] && (done[i] || i === cur) ? "done" : ""}"></span>` : ""}<a href="#/ch/${n}/${k === "commit" ? "facts" : k}" class="${i === cur ? "cur" : done[i] ? "done" : ""}"><i>${i !== cur && done[i] ? "✓" : ""}</i><span>${revising && i === 1 ? `修订（第 ${c.round + 1} 轮）` : l}</span></a>`).join("")}</div>`;
+}
+function renderHeader() {
+  const st = S.ov.status, r = st.route, p = st.progress;
+  document.title = `${S.ov.title} · 小说预览台`;
+  $("#brand").innerHTML = `<button class="menu-btn" onclick="document.body.classList.toggle('nav-open')" aria-label="目录">☰</button>
+    <div class="seal">稿</div><div class="bk"><b>${esc(S.ov.title)}</b><span>${esc(PHASE[p.phase] || p.phase)}，已提交 ${p.last_committed} 章，${st.words_total.toLocaleString()} 字</span></div>`;
+  const n = r.chapter || p.next_chapter;
+  const label = (r.chapter ? `第 ${r.chapter} 章：` : "") + (ACTION[r.action] || r.action);
+  $("#flow").innerHTML = `<div class="now" title="${esc(r.reason || "")}"><small>下一步</small><b class="${r.action === "blocked" ? "blocked" : ""}">${esc(label)}</b></div>${pipeline(n)}`;
+}
+function isActive(href) {
+  const h = location.hash || "#/";
+  return h === href || (href !== "#/" && h.startsWith(href + "/"));
+}
+function navItem(href, inner, cls = "") {
+  return `<a class="nav-item ${cls} ${isActive(href) ? "active" : ""}" href="${href}">${inner}</a>`;
+}
+function renderNav() {
+  const ov = S.ov, p = ov.status.progress, open = ov.status.comments_open;
+  let h = `<div class="nav-group">
+    ${navItem("#/", `${ICON.dash}<span class="grow">总览</span>`)}
+    ${navItem("#/outline", `${ICON.outline}<span class="grow">大纲</span><span class="count">${ov.chapters.length} 章</span>`)}
+    ${navItem("#/threads", `${ICON.threads}<span class="grow">故事线</span><span class="count">${ov.threads.length}</span>`)}
+    ${navItem("#/comments", `${ICON.notes}<span class="grow">批注</span>${open ? `<span class="hot">${open}</span>` : `<span class="count">0</span>`}`)}
+  </div>`;
+  h += `<div class="nav-group"><div class="nav-title"><span>目录</span><b>${p.last_committed} / ${ov.chapters.length} 章已提交</b></div>`;
+  let lastVol = 0, lastArc = "";
+  for (const c of ov.chapters) {
+    if (c.volume !== lastVol) { h += `<div class="toc-vol">卷${c.volume}　${esc(c.volume_title)}</div>`; lastVol = c.volume; }
+    const key = `${c.volume}-${c.arc}`;
+    if (key !== lastArc) { h += `<div class="toc-arc">${esc(c.arc_title)}</div>`; lastArc = key; }
+    const extra = c.comments_open ? `<span class="hot">${c.comments_open}</span>` : c.unsynced ? `<span class="tag">未同步</span>` : c.chapter === p.next_chapter ? `<span class="tag">进行中</span>` : "";
+    h += navItem(`#/ch/${c.chapter}`, `<span class="no">${c.chapter}</span><span class="bar ${c.stage}" title="${STAGE[c.stage][0]}"></span><span class="grow title">${esc(c.title || "无题")}</span>${extra}`, "toc-ch");
+  }
+  if (ov.skeleton) h += `<div class="toc-skel">下一弧「${esc(ov.skeleton.title || "")}」待展开</div>`;
+  if (!ov.chapters.length && !ov.skeleton) h += `<div class="toc-skel">大纲还没有章节</div>`;
+  h += `</div><div class="nav-group"><div class="nav-title"><span>设定</span></div>`;
+  const used = new Set();
+  for (const [g, re] of LIB_GROUPS) {
+    const fs = ov.files.filter(f => !used.has(f) && re.test(f));
+    if (!fs.length) continue;
+    fs.forEach(f => used.add(f));
+    h += `<div class="lib-group">${g}</div>` + fs.map(f => navItem(`#/file/${f}`, `<span class="grow" title="${esc(f)}">${esc(libName(f))}</span>`, "lib-item")).join("");
+  }
+  h += `</div>`;
+  $("#nav").innerHTML = h;
+  $("#nav .nav-item.active")?.scrollIntoView({ block: "nearest" });
+}
+
+// ------------------------------------------------------------------ pages
+function stagePill(c) {
+  const [l, k] = STAGE[c.stage] || [c.stage, ""];
+  let s = `<span class="pill ${k}">${l}</span>`;
+  if (c.verdict && c.stage === "review") { const [vl, vk] = VERDICT[c.verdict] || [c.verdict, ""]; s += ` <span class="pill ${vk}">${vl} · 第 ${c.round} 轮</span>`; }
+  return s;
+}
+function renderDash() {
+  const ov = S.ov, st = ov.status, p = st.progress, r = st.route, th = st.threads;
+  const alerts = [];
+  if (r.action === "blocked") alerts.push(["bad", `第 ${r.chapter} 章修订两轮仍需重写，Agent 停下等你决定。`]);
+  if (st.foundation_missing.length) alerts.push(["info", `基础设定还缺：${st.foundation_missing.map(esc).join("、")}`]);
+  for (const u of st.unsynced) alerts.push(["warn", `<a href="#/ch/${u.chapter}/final"><b>第 ${u.chapter} 章</b></a> 定稿被手动改过，账本还没跟上。让 Agent 跑 <code>novel-sync</code>。`]);
+  if (p.pending_revisions.length) alerts.push(["warn", `返工队列：${p.pending_revisions.map(x => `第 ${x.chapter} 章（${esc(x.reason || "")}）`).join("；")}`]);
+  if (th.overdue.length) alerts.push(["warn", `超过兑现窗口的故事线：${th.overdue.map(esc).join("、")}`]);
+
+  const arcs = [];
+  for (const c of ov.chapters) {
+    const key = `${c.volume}-${c.arc}`;
+    if (!arcs.length || arcs[arcs.length - 1].key !== key) arcs.push({ key, title: `卷${c.volume}《${c.volume_title}》· 弧${c.arc}《${c.arc_title}》`, items: [] });
+    arcs[arcs.length - 1].items.push(c);
+  }
+  const strip = arcs.map(a => `<div class="strip-arc"><div class="lbl">${esc(a.title)}</div><div class="strip">${a.items.map(c =>
+    `<a class="cell ${c.stage} ${c.chapter === p.next_chapter ? "current" : ""}" href="#/ch/${c.chapter}" title="第 ${c.chapter} 章 ${esc(c.title)} · ${STAGE[c.stage][0]}${c.words ? " · " + c.words + " 字" : ""}">${c.chapter}${c.comments_open ? '<span class="badge"></span>' : ""}</a>`).join("")}</div></div>`).join("");
+  const legend = Object.entries(STAGE).map(([k, [l]]) => `<span><i class="dot ${k}"></i>${l}</span>`).join("");
+  const steps = st.recent_steps.slice().reverse().map(s => `<li><span class="mono muted">${esc(s.at.slice(5, 16).replace("T", " "))}</span>　第 ${s.chapter} 章 · <b>${esc(s.step)}</b> ${esc(s.detail || "")}</li>`).join("");
+  const steer = p.steer_queue.map(x => `<li>· ${esc(x.text)} <span class="muted mono">${esc((x.at || "").slice(5, 16).replace("T", " "))}</span></li>`).join("");
+  const committedWords = ov.chapters.filter(c => c.stage === "committed").map(c => c.words);
+  const avg = committedWords.length ? Math.round(committedWords.reduce((a, b) => a + b, 0) / committedWords.length) : 0;
+
+  $("#main").innerHTML = `<div class="page">
+    <h1>${esc(ov.title)}</h1>
+    <div class="sub">${esc(PHASE[p.phase] || p.phase)} · harness ${esc(st.harness.version)} · 更新于 ${esc((p.updated_at || "").replace("T", " ").slice(0, 16))}</div>
+    ${alerts.length ? `<div class="alerts">${alerts.map(([k, t]) => `<div class="alert ${k}">${t}</div>`).join("")}</div>` : ""}
+    <div class="cards">
+      <div class="card"><div class="k">已提交</div><div class="v">${p.last_committed}<small>/ ${ov.chapters.length} 章已展开</small></div><div class="d">${ov.skeleton ? `下一骨架弧：${esc(ov.skeleton.title || "")}` : "大纲已全部展开"}</div></div>
+      <div class="card"><div class="k">总字数</div><div class="v">${st.words_total.toLocaleString()}<small>字</small></div><div class="d">章均 ${avg.toLocaleString()} 字</div></div>
+      <div class="card"><div class="k">下一步</div><div class="v" style="font-size:16px">${esc((r.chapter ? `第 ${r.chapter} 章 · ` : "") + (ACTION[r.action] || r.action))}</div><div class="d">${esc(r.reason || "")}</div></div>
+      <div class="card"><div class="k">人工闸门</div><div class="v" style="font-size:16px">${esc({ "per-arc": "每弧停", "per-chapter": "每章停", auto: "自动" }[p.gate] || p.gate)}</div><div class="d">${esc(p.gate)}</div></div>
+      <div class="card"><div class="k">故事线</div><div class="v">${th.active}<small>活跃</small></div><div class="d">${th.stale.length} 停滞 · ${th.overdue.length} 超期</div></div>
+      <div class="card"><div class="k">批注</div><div class="v">${st.comments_open}<small>未处理</small></div><div class="d"><a href="#/comments">查看全部 →</a></div></div>
+    </div>
+    <div class="section"><h2>章节进度 <span class="hint">点格子进入章节；红框是下一章，红点表示有未处理批注</span></h2>${strip || '<div class="muted">还没有章节大纲。</div>'}<div class="legend">${legend}</div></div>
+    <div class="duo"><div class="section"><h2>给 Agent 的干预 <span class="hint">写进 steer 队列，下一轮 /novel-next 优先处理</span></h2>
+      <textarea id="steer-text" rows="2" placeholder="例如：感情线提前到第 15 章；主角别太圣母；第 4 章重写结尾"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="primary" onclick="submitSteer()">加入干预队列</button></div>
+      ${steer ? `<div style="margin-top:10px"><div class="muted" style="font-size:12px">队列中（${p.steer_queue.length}）</div><ul class="plain">${steer}</ul></div>` : ""}
+    </div>
+    <div class="section"><h2>最近步骤</h2>${steps ? `<ul class="plain steps">${steps}</ul>` : '<div class="muted">还没有记录。</div>'}</div></div>
+  </div>`;
+}
+async function submitSteer() {
+  const t = $("#steer-text").value.trim();
+  if (!t) return;
+  try { await api("/api/steer", { method: "POST", body: { text: t } }); toast("已加入干预队列"); await refresh(true); }
+  catch (e) { toast(e.message, true); }
+}
+
+function renderOutline() {
+  const rows = S.ov.chapters;
+  let h = `<div class="page"><h1>大纲</h1><div class="sub">来自 <a href="#/file/outline/volumes.json"><code>outline/volumes.json</code></a>，可在那里直接编辑。</div>`;
+  let lastVol = 0, lastArc = "";
+  for (const c of rows) {
+    if (c.volume !== lastVol) { if (lastVol) h += `</tbody></table></div>`; h += `<div class="section"><h2>卷 ${c.volume}《${esc(c.volume_title)}》</h2><table class="grid"><thead><tr><th>章</th><th>标题</th><th>核心事件</th><th>阶段</th><th>字数</th></tr></thead><tbody>`; lastVol = c.volume; lastArc = ""; }
+    const ak = `${c.volume}-${c.arc}`;
+    if (ak !== lastArc) { h += `<tr><td colspan="5" class="muted" style="background:var(--sunk)">弧 ${c.arc}《${esc(c.arc_title)}》</td></tr>`; lastArc = ak; }
+    h += `<tr class="click" onclick="location.hash='#/ch/${c.chapter}'"><td class="mono">${c.chapter}</td><td>${esc(c.title)}</td><td>${esc(c.core_event)}</td><td>${stagePill(c)}</td><td class="mono">${c.words || ""}</td></tr>`;
+  }
+  if (lastVol) h += `</tbody></table></div>`;
+  if (S.ov.skeleton) h += `<div class="alert info">下一个骨架弧：卷 ${S.ov.skeleton.volume} 弧 ${S.ov.skeleton.arc}《${esc(S.ov.skeleton.title || "")}》— ${esc(S.ov.skeleton.goal || "")}（预计 ${esc(S.ov.skeleton.estimated_chapters ?? "?")} 章，尚未展开）</div>`;
+  if (!rows.length && !S.ov.skeleton) h += `<div class="empty">还没有大纲。</div>`;
+  $("#main").innerHTML = h + `</div>`;
+}
+
+function renderThreads() {
+  const TYPE = { main: "主线", subplot: "支线", mystery: "悬念", relationship: "关系", foreshadow: "伏笔", character_arc: "人物弧", world: "世界" };
+  const STATUS = { planned: ["预登记", ""], active: ["活跃", "ok"], dormant: ["休眠", "warn"], resolved: ["已兑现", "info"], abandoned: ["已放弃", ""] };
+  const rows = S.ov.threads.map(t => {
+    const [sl, sk] = STATUS[t.status] || [t.status, ""];
+    const flags = [t.stale ? `<span class="pill warn">${t.idle} 章未动</span>` : "", t.payoff_overdue ? `<span class="pill bad">超期</span>` : t.payoff_due ? `<span class="pill violet">到期</span>` : ""].join(" ");
+    return `<tr><td class="mono">${esc(t.id)}</td><td><b>${esc(t.title)}</b><div class="muted">${esc(t.promise || "")}</div></td><td>${esc(TYPE[t.type] || t.type)}</td><td><span class="pill ${sk}">${sl}</span> ${flags}</td><td class="mono">${t.planted_at ?? "—"} → ${t.last_touched ?? "—"}</td><td class="mono">${t.payoff_window ? t.payoff_window.join("–") : "—"}</td><td>${esc((t.characters || []).join("、"))}</td></tr>`;
+  }).join("");
+  $("#main").innerHTML = `<div class="page"><h1>故事线</h1><div class="sub">来自 <a href="#/file/threads/registry.json"><code>threads/registry.json</code></a>，停滞 / 到期按已提交章节计算。</div>
+    <div class="section">${rows ? `<table class="grid"><thead><tr><th>ID</th><th>线程</th><th>类型</th><th>状态</th><th>埋设 → 最近</th><th>兑现窗口</th><th>人物</th></tr></thead><tbody>${rows}</tbody></table>` : '<div class="muted">还没有故事线。</div>'}</div></div>`;
+}
+
+function when(at) { return esc((at || "").slice(5, 16).replace("T", " ").replace("-", "/")); }
+function noteCard(c, withPath = false) {
+  return `<div class="cm ${c.status} ${c.id === S.activeCid ? "active" : ""}" id="cm-${c.id}" onmouseenter="focusMark('${c.id}')">
+    ${c.status !== "open" ? `<span class="stamp">已处理</span>` : ""}
+    <div class="meta"><span class="who">${esc(c.id)}</span><span>${when(c.at)}</span>${withPath ? `<a href="${fileHref(c.path)}" class="mono">${esc(c.path)}</a>` : ""}${c.steered ? `<span class="agent">已交给 Agent</span>` : ""}</div>
+    ${c.quote ? `<div class="quote">${esc(c.quote)}</div>` : ""}<div class="text">${esc(c.text)}</div>
+    ${c.resolution ? `<div class="res">${esc(c.resolution)}</div>` : ""}${commentActions(c)}</div>`;
+}
+async function renderComments() {
+  const all = await api("/api/comments");
+  const open = all.filter(c => c.status === "open"), done = all.filter(c => c.status !== "open");
+  $("#main").innerHTML = `<div class="page"><h1>批注</h1><div class="sub">未处理的批注会自动带进对应章节的计划、写作、检查、评审上下文；已提交章节的批注要「交给 Agent」才会触发返工。</div>
+    <div class="section"><h2>未处理 <span class="hint">${open.length}</span></h2>${open.map(c => noteCard(c, true)).join("") || '<div class="muted">没有未处理的批注。在章节正文里选中文字就能批注。</div>'}</div>
+    <div class="section"><h2>已处理 <span class="hint">${done.length}</span></h2>${done.slice().reverse().map(c => noteCard(c, true)).join("") || '<div class="muted">还没有处理过的批注。</div>'}</div></div>`;
+}
+function commentActions(c) {
+  if (c.status !== "open") return `<div class="acts"><button class="link" onclick="commentOp('reopen','${c.id}')">重新打开</button></div>`;
+  return `<div class="acts"><button class="link" onclick="commentOp('resolve','${c.id}')">标记已处理</button>${c.steered ? "" : `<button class="link" onclick="commentOp('steer','${c.id}')" title="加入干预队列，Agent 下一轮按干预流程处理">交给 Agent</button>`}</div>`;
+}
+async function commentOp(op, id) {
+  try { await api(`/api/comments/${op}`, { method: "POST", body: { id } }); toast({ resolve: "已标记处理", reopen: "已重新打开", steer: "已加入干预队列" }[op]); await refresh(true); }
+  catch (e) { toast(e.message, true); }
+}
+
+// ------------------------------------------------------------------ 文件与章节
+function chapterPath(n, kind) {
+  if (kind === "check") return `chapters/reviews/ch${pad(n)}.check.json`;
+  return `chapters/${kind}/ch${pad(n)}.${KIND[kind][1]}`;
+}
+function fileHref(path) {
+  const m = path.match(/^chapters\/(plans|drafts|final|facts|reviews)\/ch(\d{4})(\.check)?\./);
+  if (m) return `#/ch/${+m[2]}/${m[3] ? "check" : m[1]}`;
+  return `#/file/${path}`;
+}
+function defaultKind(c) {
+  if (!c) return "plans";
+  if (c.files.final) return "final";
+  if (c.files.drafts) return "drafts";
+  return "plans";
+}
+
+async function openFile(path, header) {
+  if (S.editing && S.dirty && !confirmLeave()) return;
+  S.editing = false; S.dirty = false; S.staleOnDisk = false; S.pendingQuote = ""; S.activeCid = null;
+  try { S.file = await api(`/api/file?path=${encodeURIComponent(path)}`); }
+  catch (e) {
+    S.file = null;
+    $("#main").innerHTML = `<div class="doc"><div class="doc-main">${header}<div class="empty">${e.status === 404 ? "这个产物还没生成。" : esc(e.message)}</div></div></div>`;
+    return;
+  }
+  S.file.header = header;
+  renderFile();
+}
+function confirmLeave() { return window.confirm("有未保存的修改，确定离开吗？"); }
+
+function renderFile() {
+  const f = S.file, path = f.path;
+  const isChapterText = /^chapters\/(drafts|final)\//.test(path);
+  const isJson = /\.json$/.test(path), isJsonl = /\.jsonl$/.test(path);
+  let banners = "";
+  if (S.staleOnDisk) banners += `<div class="alert warn banner">磁盘上的版本已更新（多半是 Agent 刚写入）。<button onclick="reloadFile()">载入最新版</button>${S.editing ? " 载入会丢掉你未保存的修改。" : ""}</div>`;
+  if (f.committed && path.startsWith("chapters/final/")) banners += `<div class="alert info banner">本章已提交。改定稿后要让 Agent 跑 <code>novel-sync</code> 重抽事实，否则账本会和正文脱节。</div>`;
+  if (!f.editable) banners += `<div class="alert info banner">这是角色或工具的产物，只读。要改，用右侧批注说明问题，或交给 Agent。</div>`;
+  let lint = "";
+  if (f.lint && (f.lint.issues?.length || f.lint.warnings?.length)) {
+    lint = `<div class="lint"><details ${f.lint.issues?.length ? "open" : ""}><summary>${f.lint.issues?.length ? `<span class="pill bad">${f.lint.issues.length} 个必须修复</span> ` : ""}${f.lint.warnings?.length ? `<span class="pill warn">${f.lint.warnings.length} 个提醒</span>` : ""} <span class="muted">文体机械检查（novel.py lint）</span></summary>
+      ${f.lint.issues?.length ? `<ul>${f.lint.issues.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}${f.lint.warnings?.length ? `<ul class="muted">${f.lint.warnings.map(x => `<li>${esc(x)}</li>`).join("")}</ul>` : ""}</details></div>`;
+  }
+  const btns = f.editable ? (S.editing
+    ? `<button onclick="cancelEdit()">取消</button><button class="primary" onclick="saveFile()">保存 <span style="opacity:.7">⌘S</span></button>`
+    : `<button onclick="startEdit()">编辑</button>`) : `<span class="pill">只读</span>`;
+  let body;
+  if (S.editing) {
+    body = `<textarea class="editor ${isChapterText ? "" : "code"}" id="editor" spellcheck="false"></textarea>`;
+  } else if (/chapters\/reviews\/ch\d{4}\.json$/.test(path)) {
+    body = reviewView(f.text);
+  } else if (isJson) {
+    body = jsonView(f.text);
+  } else if (isJsonl) {
+    body = jsonlView(f.text);
+  } else {
+    body = `<div class="${isChapterText ? "prose" : "md"}" id="content">${md(f.text)}</div>`;
+  }
+  $("#main").innerHTML = `<div class="doc"><div class="doc-main" id="doc-main">
+      ${f.header.replace("%BTNS%", btns)}${banners}${S.editing ? "" : lint}
+      <div class="body" id="body">${body}</div></div>
+    <aside class="doc-side" id="side"></aside></div>`;
+  if (S.editing) {
+    const ed = $("#editor");
+    ed.value = S.draftText ?? f.text;
+    ed.addEventListener("input", () => { S.dirty = true; S.draftText = ed.value; });
+    ed.focus();
+  } else {
+    highlightComments();
+  }
+  renderSide();
+}
+function reviewView(text) {
+  let r;
+  try { r = JSON.parse(text); } catch { return jsonView(text); }
+  const [vl, vk] = VERDICT[r.verdict] || [r.verdict, ""];
+  const scores = Object.entries(r.scores || {}).map(([k, v]) => `<div class="score"><div style="display:flex;justify-content:space-between"><span>${esc(k)}</span><span class="mono">${esc(v)}</span></div><div class="bar"><i style="width:${Math.max(0, Math.min(100, +v || 0))}%"></i></div></div>`).join("");
+  const cc = Object.entries(r.contract_check || {}).map(([k, v]) => `<span class="pill ${/done|clean/.test(v) ? "ok" : /partial/.test(v) ? "warn" : "bad"}">${esc(k)}: ${esc(v)}</span>`).join(" ");
+  const issues = (r.issues || []).map(i => `<div class="issue ${esc(i.severity)}"><div><span class="pill ${i.severity === "critical" ? "bad" : i.severity === "error" ? "warn" : "info"}">${esc(i.severity)}</span> <b>${esc(i.dimension)}</b> ${esc(i.description)}</div>${i.evidence ? `<div class="ev">${esc(i.evidence)}</div>` : ""}${i.suggestion ? `<div><span class="muted">改法：</span>${esc(i.suggestion)}</div>` : ""}${i.location ? `<div class="muted" style="font-size:12px">${esc(i.location)}</div>` : ""}</div>`).join("");
+  const instr = (r.revision_instructions || []).map(x => `<li>${esc(x)}</li>`).join("");
+  return `<div class="md"><div class="review-head"><span class="verdict">${esc(vl)}</span><span class="pill ${vk}">${esc(r.verdict)}</span><span class="pill">第 ${esc(r.round)} 轮</span>${cc}</div>
+    <div class="scores">${scores}</div>${issues ? `<h3>问题</h3>${issues}` : ""}${instr ? `<h3>修订指令</h3><ol>${instr}</ol>` : ""}</div>`;
+}
+
+function renderSide() {
+  const side = $("#side");
+  if (!side) return;
+  const all = S.file.comments || [];
+  const open = all.filter(c => c.status === "open");
+  const shown = S.sideFilter === "all" ? all.slice().sort((a, b) => (a.status === "open" ? 0 : 1) - (b.status === "open" ? 0 : 1)) : open;
+  const typed = $("#cm-text")?.value || "";
+  side.innerHTML = `<div class="side-head"><h3>朱批</h3><span class="stat">${open.length} 条待处理</span>
+      <div class="filter"><button class="${S.sideFilter !== "all" ? "on" : ""}" onclick="S.sideFilter='open';renderSide()">待处理</button><button class="${S.sideFilter === "all" ? "on" : ""}" onclick="S.sideFilter='all';renderSide()">全部 ${all.length}</button></div></div>
+    <div class="composer">
+      ${S.pendingQuote ? `<div class="quote">${esc(S.pendingQuote)}<button class="link" onclick="S.pendingQuote='';renderSide()" title="改为对整个文件批注">✕</button></div>` : `<div class="hint">选中正文可以针对那一句批；不选就是批整篇。</div>`}
+      <textarea id="cm-text" rows="3" placeholder="写下你的意见"></textarea>
+      <div class="foot"><label><input type="checkbox" id="cm-steer"> 交给 Agent 处理</label><button class="zhu" onclick="submitComment()">添加批注</button></div>
+    </div>
+    <div class="notes">${shown.map(c => noteCard(c)).join("") || `<div class="side-empty"><b>${all.length ? "都处理完了" : "这一页还没有批注"}</b>${all.length ? "切到「全部」可以看已处理的批注。" : "读到哪里觉得不对，选中那段文字，点浮出的「朱批」就能写。"}</div>`}</div>`;
+  const ta = $("#cm-text");
+  ta.value = typed;
+  ta.addEventListener("keydown", e => { if ((e.metaKey || e.ctrlKey) && e.key === "Enter") submitComment(); });
+}
+async function submitComment() {
+  const text = $("#cm-text").value.trim();
+  if (!text) return toast("批注内容不能为空", true);
+  try {
+    await api("/api/comments", { method: "POST", body: { path: S.file.path, quote: S.pendingQuote, text, steer: $("#cm-steer").checked } });
+    S.pendingQuote = "";
+    toast("已添加批注");
+    await refresh(true);
+  } catch (e) { toast(e.message, true); }
+}
+
+// 在渲染后的正文里给批注引文加高亮：只在单个文本节点内匹配，跨段的引文找不到时不强求
+function highlightComments() {
+  const root = $("#body");
+  if (!root) return;
+  for (const c of S.file.comments || []) {
+    if (!c.quote) continue;
+    const needle = c.quote.split("\n")[0].trim().slice(0, 80);
+    if (!needle) continue;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      if (node.parentElement.closest("mark")) continue;
+      const idx = node.nodeValue.indexOf(needle);
+      if (idx < 0) continue;
+      const range = document.createRange();
+      range.setStart(node, idx); range.setEnd(node, idx + needle.length);
+      const mk = document.createElement("mark");
+      mk.className = `hl ${c.status !== "open" ? "resolved" : ""}`;
+      mk.dataset.cid = c.id; mk.title = c.text;
+      range.surroundContents(mk);
+      mk.addEventListener("click", () => { S.activeCid = c.id; renderSide(); $(`#cm-${c.id}`)?.scrollIntoView({ block: "nearest", behavior: "smooth" }); focusMark(c.id); });
+      break;
+    }
+  }
+}
+function focusMark(id) {
+  document.querySelectorAll("mark.hl").forEach(m => m.classList.toggle("active", m.dataset.cid === id));
+}
+
+// 选中正文 → 浮出「批注」按钮
+document.addEventListener("mouseup", e => {
+  const btn = $("#selbtn");
+  if (e.target === btn) return;
+  setTimeout(() => {
+    const sel = window.getSelection();
+    const body = $("#body");
+    const text = sel && !sel.isCollapsed ? sel.toString().trim() : "";
+    if (!text || !body || S.editing || !body.contains(sel.anchorNode)) { btn.style.display = "none"; return; }
+    const rect = sel.getRangeAt(0).getBoundingClientRect();
+    btn.style.left = `${Math.min(window.innerWidth - 90, rect.right + 6)}px`;
+    btn.style.top = `${Math.max(8, rect.top - 34)}px`;
+    btn.style.display = "block";
+    btn.onclick = () => { S.pendingQuote = text.slice(0, 500); btn.style.display = "none"; sel.removeAllRanges(); renderSide(); $("#cm-text")?.focus(); };
+  });
+});
+
+function startEdit() { S.editing = true; S.dirty = false; S.draftText = null; renderFile(); }
+function cancelEdit() { if (S.dirty && !confirmLeave()) return; S.editing = false; S.dirty = false; S.draftText = null; renderFile(); }
+async function saveFile() {
+  if (!S.editing) return;
+  const text = $("#editor").value;
+  try {
+    const res = await api("/api/file", { method: "PUT", body: { path: S.file.path, text, sha: S.file.sha } });
+    const header = S.file.header;
+    S.file = { ...res, header };
+    S.editing = false; S.dirty = false; S.draftText = null; S.staleOnDisk = false;
+    renderFile();
+    toast(res.notice || (res.lint?.issues?.length ? `已保存，lint 有 ${res.lint.issues.length} 个必须修复的问题` : "已保存"), !!res.lint?.issues?.length);
+    await refresh(false);
+  } catch (e) {
+    if (e.status === 409) { S.staleOnDisk = true; renderFile(); }
+    toast(e.message, true);
+  }
+}
+async function reloadFile() {
+  S.editing = false; S.dirty = false; S.draftText = null;
+  const header = S.file.header;
+  S.file = { ...(await api(`/api/file?path=${encodeURIComponent(S.file.path)}`)), header };
+  S.staleOnDisk = false;
+  renderFile();
+}
+document.addEventListener("keydown", e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === "s" && S.editing) { e.preventDefault(); saveFile(); }
+});
+window.addEventListener("beforeunload", e => { if (S.editing && S.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+function chapterHeader(n, kind) {
+  const c = chapterRow(n);
+  const tabs = Object.entries(KIND).map(([k, [l]]) => {
+    const has = c ? (k === "check" ? c.files.reviews : c.files[k]) : true;
+    return `<a href="#/ch/${n}/${k}" class="${k === kind ? "on" : ""} ${has ? "" : "off"}">${l}</a>`;
+  }).join("");
+  const hasNext = S.ov.chapters.some(x => x.chapter === n + 1);
+  return `<div class="doc-head"><div class="row">
+      <span class="pager"><a href="#/ch/${n - 1}/${kind}" class="${n > 1 ? "" : "off"}" title="上一章">‹</a><a href="#/ch/${n + 1}/${kind}" class="${hasNext ? "" : "off"}" title="下一章">›</a></span>
+      <span class="ttl">第 ${n} 章　${esc(c?.title || "")}</span>${c ? stagePill(c) : ""}${c?.words ? `<span class="pill">${c.words.toLocaleString()} 字</span>` : ""}
+      <span class="spacer"></span><span class="path">${esc(chapterPath(n, kind))}</span>%BTNS%</div>
+    <div class="row2"><div class="tabs">${tabs}</div></div></div>`;
+}
+function fileHeader(path) {
+  return `<div class="doc-head file"><div class="row"><span class="ttl">${esc(libName(path))}</span><span class="spacer"></span><span class="path">${esc(path)}</span>%BTNS%</div></div>`;
+}
+
+// ------------------------------------------------------------------ 路由与轮询
+async function route() {
+  document.body.classList.remove("nav-open");
+  $("#selbtn").style.display = "none";
+  const h = decodeURIComponent(location.hash.slice(1) || "/");
+  renderNav();
+  let m;
+  if ((m = h.match(/^\/ch\/(\d+)(?:\/(\w+))?$/))) {
+    const n = +m[1], kind = m[2] && KIND[m[2]] ? m[2] : defaultKind(chapterRow(n));
+    return openFile(chapterPath(n, kind), chapterHeader(n, kind));
+  }
+  if ((m = h.match(/^\/file\/(.+)$/))) return openFile(m[1], fileHeader(m[1]));
+  S.file = null; S.editing = false;
+  if (h === "/outline") return renderOutline();
+  if (h === "/threads") return renderThreads();
+  if (h === "/comments") return renderComments();
+  return renderDash();
+}
+let lastHash = location.hash;
+window.addEventListener("hashchange", () => {
+  if (S.editing && S.dirty && !confirmLeave()) { history.replaceState(null, "", lastHash); return; }
+  S.editing = false; S.dirty = false;
+  lastHash = location.hash;
+  route();
+});
+
+// force=true：重画当前页面（用于自己刚改过数据）；否则只在工作区有变动时刷新，编辑中只提示不覆盖
+async function refresh(force) {
+  await loadOverview();
+  if (S.file) {
+    const fresh = await api(`/api/file?path=${encodeURIComponent(S.file.path)}`).catch(() => null);
+    if (!fresh) return;
+    if (S.editing) {
+      if (fresh.sha !== S.file.sha && !S.staleOnDisk) { S.staleOnDisk = true; renderFile(); }
+      S.file.comments = fresh.comments; renderSide();
+      return;
+    }
+    const header = S.file.header;
+    const changed = fresh.sha !== S.file.sha;
+    S.file = { ...fresh, header };
+    if (changed || force) {
+      const scroller = $("#doc-main"), top = scroller ? scroller.scrollTop : 0;
+      renderFile();
+      if ($("#doc-main")) $("#doc-main").scrollTop = top;
+    } else {
+      renderSide(); highlightComments();
+    }
+    return;
+  }
+  const typing = document.activeElement && document.activeElement.tagName === "TEXTAREA" && document.activeElement.value;
+  if (!typing || force) route();
+}
+async function poll() {
+  const live = $("#live");
+  try {
+    const { stamp } = await api("/api/stamp");
+    live.classList.remove("off"); live.querySelector("span").textContent = "实时同步";
+    if (stamp !== S.stamp) {
+      live.classList.remove("flash"); void live.offsetWidth; live.classList.add("flash");
+      const keepQuote = S.pendingQuote, typed = $("#cm-text")?.value;
+      await refresh(false);
+      S.pendingQuote = keepQuote;
+      if (typed && $("#cm-text")) { renderSide(); $("#cm-text").value = typed; }
+    }
+  } catch {
+    live.classList.add("off"); live.querySelector("span").textContent = "已断开";
+  }
+  setTimeout(poll, 2500);
+}
+
+(async () => {
+  try { await loadOverview(); await route(); }
+  catch (e) { $("#main").innerHTML = `<div class="empty">加载失败：${esc(e.message)}</div>`; }
+  setTimeout(poll, 2500);
+})();
+</script>
+</body>
+</html>

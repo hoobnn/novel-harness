@@ -12,4 +12,4 @@ description: 推进创作：按 status 路由循环派发 planner / writer / che
 3. `checker` 与 `editor` 用一条消息并行派发；editor 的 prompt 里说明 check.json 会由 checker 生成，若 editor 先完成而 check.json 不存在，主会话在 checker 返回后把 findings 合并进 review 的 consistency 维度（critical 存在时 verdict 升为 rewrite）。
 4. commit 后按 `docs/protocol.md` 做 git 提交（首次提交前先问用户是否要 AI 署名，并把答案记入记忆）。
 5. 停下的条件：命中 gate；参数 N 已达到；`route.action` 为 `architect:foundation`（设定被删）、`done`；修订 2 轮仍 rewrite；任何角色连续 2 次产物校验失败。
-6. 停下时汇报：本次提交了哪些章（章号、标题、字数）、评审结论分布、线程台账里的 stale 与 overdue、下一步路由是什么、需要用户决定什么。不贴正文。
+6. 停下时汇报：本次提交了哪些章（章号、标题、字数）、评审结论分布、线程台账里的 stale 与 overdue、未处理的预览台批注数、下一步路由是什么、需要用户决定什么。不贴正文。

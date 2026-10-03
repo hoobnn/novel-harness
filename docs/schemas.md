@@ -34,6 +34,7 @@ chapters/
   facts/chNNNN.json        章节事实（账本员抽取，commit 时校验）
 summaries/chapters|arcs|volumes/
 state/progress.json        唯一进度事实源；state/decisions.jsonl 决策审计
+state/comments.json        预览台批注（novel.py 写入：serve 与 comment 命令）
 state/checkpoints.jsonl    步级进度（哪章哪步何时完成），崩溃后据此续跑；只记事实不参与路由
 index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重建，不入 git）
 ```
@@ -186,7 +187,22 @@ round 由主会话递增，最多 2 轮修订。第 2 轮后仍为 `polish` 则�
  "volume_reviews_done":[],"steer_queue":[]}
 ```
 
+`steer_queue` 条目：`{"text":"…","at":"…","comment":"c0003"}`，`comment` 可选，指向来源批注（见 `state/comments.json`）。
+
 只由 `novel.py` 写入。
+
+## state/comments.json（预览台批注）
+
+```json
+[{"id":"c0003","at":"2026-10-03T13:27:32+08:00","path":"chapters/drafts/ch0012.md","chapter":12,
+  "quote":"老周蹲在门槛上抽烟","text":"老周这里太闲了","status":"open",
+  "steered":"2026-10-03T13:30:00+08:00","resolved_at":null,"resolution":null}]
+```
+
+- `chapter` 由 `path` 里的 `chNNNN` 推出，设定类文件为 `null`。`quote` 为空表示针对整个文件。
+- `status`：open / resolved。open 且 `chapter == N` 的批注注入第 N 章的 planner / writer / checker / editor 上下文包。
+- `steered`：已转为 `steer_queue` 里一条带 `"comment":"c0003"` 的干预。
+- 只由 `novel.py` 写入（`serve` 的网页操作与 `comment resolve|steer` 命令）。
 
 ## state/checkpoints.jsonl（步级进度）
 
