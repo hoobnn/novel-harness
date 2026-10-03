@@ -206,6 +206,11 @@ def main() -> None:
         ws7.mkdir()
         run(sys.executable, str(NOVEL), "init", cwd=ws7)
         smoke_rounds(ws7)
+        # 10. 账本由 facts 重放：重提不重复，上下文不看后文
+        ws8 = tmp / "ledger"
+        ws8.mkdir()
+        run(sys.executable, str(NOVEL), "init", cwd=ws8)
+        smoke_ledger(ws8)
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
@@ -244,18 +249,69 @@ def smoke_rounds(ws: Path) -> None:
     polish = {"chapter": 1, "round": 1, "verdict": "polish", "issues": [{"severity": "error"}]}
     (reviews / "ch0001.json").write_text(json.dumps(polish), encoding="utf-8")
     (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": []}', encoding="utf-8")
-    check(route()["action"] == "writer:revise", "第 1 轮 polish 路由到 writer:revise")
+    check(route()["action"] == "next-round", "第 1 轮 polish 先归档本轮评审")
     r = nv("next-round", "1")
-    check(r.returncode == 0 and (reviews / "ch0001.r1.json").exists() and (reviews / "ch0001.r1.check.json").exists(),
-          "next-round 归档本轮 review 与 check")
+    check(r.returncode == 0 and all((reviews / f"ch0001.r1{x}").exists() for x in (".json", ".check.json", ".draft.md")),
+          "next-round 归档 review、check 与被评审的稿子")
     r = route()
-    check(r["action"] == "checker+editor" and r["round"] == 2, "归档后进入第 2 轮评审")
+    check(r["action"] == "writer:revise" and r["review"].endswith("ch0001.r1.json"), "草稿未改时路由到 writer:revise 并指向归档评审")
+    draft.write_text("# 借炉\n\n炉火很旺，他接过铁钳。\n", encoding="utf-8")
+    r = route()
+    check(r["action"] == "checker+editor" and r["round"] == 2, "写手改完后进入第 2 轮评审")
     (reviews / "ch0001.json").write_text(json.dumps(polish), encoding="utf-8")   # editor 照旧写错 round=1
     (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": []}', encoding="utf-8")
     check(route()["action"] == "finalize", "第 2 轮仍 polish 直接 finalize，不受 editor 自报 round 影响")
     check(nv("next-round", "1").returncode != 0, "第 2 轮后 next-round 被拒绝")
+    (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": [{"severity": "critical"}]}', encoding="utf-8")
+    (reviews / "ch0001.json").write_text(json.dumps({**polish, "issues": []}), encoding="utf-8")
+    check(route()["action"] == "blocked", "checker 的 critical 不经 editor 合并也计入 verdict")
+    (reviews / "ch0001.check.json").write_text('{"chapter": 1, "findings": []}', encoding="utf-8")
     (reviews / "ch0001.json").write_text(json.dumps({**polish, "verdict": "rewrite", "issues": [{"severity": "critical"}]}), encoding="utf-8")
     check(route()["action"] == "blocked", "第 2 轮仍 rewrite 时 blocked")
+
+
+def smoke_ledger(ws: Path) -> None:
+    def nv(*args):
+        return run(sys.executable, "tools/novel.py", *args, cwd=ws)
+
+    chapters = [{"title": f"第{i}章", "characters": ["林越"]} for i in (1, 2, 3)]
+    for rel, text in (("bible/premise.md", "# 故事前提\n"), ("bible/world/rules.md", "# 规则\n"), ("bible/world/calendar.md", "# 日历\n"),
+                      ("outline/compass.json", "{}"), ("threads/registry.json", '[{"id":"T01","title":"炉底的字","type":"main","status":"planned"}]'),
+                      ("bible/characters.json", '[{"name":"林越","slug":"lin-yue","tier":"core"}]'),
+                      ("outline/volumes.json", json.dumps([{"title": "卷", "arcs": [{"title": "弧", "chapters": chapters}]}], ensure_ascii=False))):
+        (ws / rel).parent.mkdir(parents=True, exist_ok=True)
+        (ws / rel).write_text(text, encoding="utf-8")
+    locs = {1: "青石镇·铁匠铺", 2: "青石镇·客栈", 3: "黑水渡"}
+    for n in (1, 2, 3):
+        (ws / f"chapters/final/ch{n:04d}.md").write_text(f"# 第{n}章\n\n林越和老周在{locs[n]}说话。\n", encoding="utf-8")
+        facts = {"chapter": n, "title": f"第{n}章", "summary": "…", "key_events": ["…"], "time": {"day_start": n, "day_end": n},
+                 "scenes": [{"id": f"ch{n:04d}-s1", "day": n, "location": locs[n], "characters": ["林越", "老周"], "summary": f"林越在{locs[n]}"}],
+                 "threads": [{"id": "T01", "action": "plant" if n == 1 else "advance", "note": f"ch{n}"}],
+                 "knowledge": [{"who": "林越", "fact": f"第{n}章的秘密", "status": "knows"}],
+                 "locations_end": {"林越": locs[n]}, "cast_intros": [{"name": "老周", "brief_role": "铁匠"}] if n == 1 else []}
+        (ws / f"chapters/facts/ch{n:04d}.json").write_text(json.dumps(facts, ensure_ascii=False), encoding="utf-8")
+        r = nv("commit", str(n))
+        check(r.returncode == 0, f"提交第 {n} 章 ({r.stderr.strip()[:80] or 'ok'})")
+    def ledger_counts():
+        tl = (ws / "ledger/timeline.jsonl").read_text(encoding="utf-8").strip().splitlines()
+        cast = json.loads((ws / "ledger/cast.json").read_text())
+        th = json.loads((ws / "ledger/threads.json").read_text())
+        return len(tl), cast["老周"]["count"], len(th[0]["milestones"])
+    before = ledger_counts()
+    check(before == (3, 3, 3), f"三章提交后账本计数正确 {before}")
+    check(json.loads((ws / "threads/registry.json").read_text())[0].get("milestones") is None, "commit 不再改写 architect 的 registry")
+    r = nv("commit", "2", "--force")
+    check(r.returncode == 0 and ledger_counts() == before, "commit --force 重提旧章不重复追加账本")
+    ctx = nv("context", "2", "--for", "writer").stdout
+    check("第1章的秘密" in ctx and "第3章的秘密" not in ctx and "黑水渡" not in ctx, "返工第 2 章时上下文只含第 1 章为止的知识与位置")
+    rec = json.loads(nv("recall", "--entity", "林越", "--before", "2").stdout)
+    check(rec["state"]["location"] == "青石镇·铁匠铺" and len(rec["knowledge"]) == 1, "recall --before 的状态投影也截止在前一章")
+    # 0.4 及以前：commit 把运行字段写进了 registry
+    reg = json.loads((ws / "threads/registry.json").read_text())
+    reg[0].update(status="active", planted_at=1, last_touched=3, milestones=[{"chapter": 1}, {"chapter": 2}, {"chapter": 3}])
+    (ws / "threads/registry.json").write_text(json.dumps(reg), encoding="utf-8")
+    r = nv("rebuild")
+    check(r.returncode == 0 and ledger_counts() == before, "旧 registry 带运行字段时 rebuild 不重复 milestones")
 
 
 def smoke_studio(ws: Path) -> None:

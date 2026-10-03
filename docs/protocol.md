@@ -20,8 +20,9 @@
 | `architect:new-volume` / `finale-check` | architect | 卷摘要、指南针、线程台账 | 追加新卷或宣告收官/完结 | 同上；完结时 `set-phase complete` |
 | `planner` | planner | `context N --for planner` | `chapters/plans/chNNNN.md` | 文件存在且含「场景节拍表」「线程预算」「契约」三节 |
 | `writer` | writer | `context N --for writer` | `chapters/drafts/chNNNN.md` | `lint N` 的 `issues` 为空（warnings 允许） |
-| `checker+editor` | checker 与 editor **并行**派发，prompt 里写明 `route.round` | `context N --for checker/editor` | `chapters/reviews/chNNNN.check.json` 与 `chapters/reviews/chNNNN.json` | 两个文件都存在且 `verdict` 合法 |
-| `writer:revise` | writer（修订模式） | review 的 `revision_instructions` + 草稿 | 覆盖 `chapters/drafts/chNNNN.md` | `novel.py next-round N` 成功（它先跑 lint，再把本轮 review 与 check 归档为 `chNNNN.rK.json`，路由自动进入下一轮） |
+| `checker+editor` | checker 与 editor **并行**派发，prompt 里写明 `route.round` | `context N --for checker/editor` | `chapters/reviews/chNNNN.check.json` 与 `chapters/reviews/chNNNN.json` | 两个文件都存在且 `verdict` 合法。checker 的 findings 由 `novel.py` 计入 verdict，不要手工合并进 review |
+| `next-round` | 你自己执行 | — | `novel.py next-round N`：把本轮 review、check 与被评审的稿子归档为 `chNNNN.rK.*` | 输出含 `archived_round`，路由变为 `writer:revise` |
+| `writer:revise` | writer（修订模式） | `route.review` 与 `route.check` 指向的归档评审 + 草稿 | 覆盖 `chapters/drafts/chNNNN.md` | `lint N` 的 `issues` 为空；草稿改动后路由自动进入下一轮 `checker+editor` |
 | `finalize` | 你自己执行 | — | `novel.py finalize N` | 定稿文件存在 |
 | `ledger` | ledger | 定稿 + 计划 | `chapters/facts/chNNNN.json` | `validate-facts N` 输出 OK |
 | `commit` | 你自己执行 | — | `novel.py commit N` | 输出含 `committed`；检查 `flags` |
@@ -30,7 +31,7 @@
 | `revise` | editor 定范围 → writer 修订 → ledger 重抽 → `commit N --force` | `pending_revisions[0]` | 定稿与事实更新 | 队列弹出 |
 | `steer` | 见「用户干预」 | `steer_queue[0]` | — | `steer pop` |
 
-评审轮次由 `novel.py` 按归档文件数推出（`route.round`），不要手删 review，也不要让 editor 自己数轮次。最多修订一次：第 2 轮评审仍是 `polish` 就直接 finalize，把遗留问题写进 facts 的 `outline_feedback`；仍是 `rewrite` 则 `route` 返回 `blocked`，停下问用户。
+评审轮次由 `novel.py` 按归档文件数推出（`route.round`），不要手删 review，也不要让 editor 自己数轮次。想确认修订是否真的更好（用户要求，或第 2 轮分数不升反降）时，可派 judge 盲比 `chapters/reviews/chNNNN.r1.draft.md` 与当前草稿，结论写进返回报告，不改变路由。最多修订一次：第 2 轮评审仍是 `polish` 就直接 finalize，把遗留问题写进 facts 的 `outline_feedback`；仍是 `rewrite` 则 `route` 返回 `blocked`，停下问用户。
 
 ## 闸门（人工检查点）
 
@@ -43,7 +44,8 @@
 
 ## 硬约束
 
-- `ledger/`、`state/`、`summaries/chapters/`、`index/` 只由 `novel.py` 写入。任何 Agent 都不得手改。
+- `ledger/`、`state/`、`index/` 只由 `novel.py` 写入。任何 Agent 都不得手改。账本是 `chapters/facts/` 的派生视图：`commit` 校验并给 facts 盖章后整体重放落盘，`novel.py rebuild` 随时可从 facts 重算；要改事实就改 facts 再 `commit N --force`。
+- `threads/registry.json` 是 architect 的线程声明（新增、改承诺与兑现窗口、搁置）；线程运行态（是否落地、推进记录、停滞）看 `novel.py threads` 或 `ledger/threads.json`。
 - 正文只出现在 `chapters/drafts` 与 `chapters/final`，由 writer 直接写文件。Agent 在聊天里输出正文不算完成；主会话不得从聊天消息里截取、拼接正文再落盘，writer 返回了正文却没写文件就重派。草稿里只能有章标题和正文：分割线、写作报告、字数统计会被 `lint` 拦下。
 - 子智能体之间不共享上下文，一切靠文件。给子智能体的 prompt 必须包含：章节号、要读的文件、要写的文件、完成判据、不要做什么。
 - 不把整本书塞进任何一个上下文。需要前文时用 `novel.py context / search / recall / timeline`。
@@ -95,7 +97,8 @@ python3 tools/novel.py threads --stale
 python3 tools/novel.py check 12 / lint 12 / stylestat
 python3 tools/novel.py gate per-chapter
 python3 tools/novel.py checkpoint add 12 writer "草稿 3600 字"   # 子智能体返回并校验通过后记一步
-python3 tools/novel.py next-round 12          # 修订稿 lint 通过后归档本轮评审，进入下一轮
+python3 tools/novel.py next-round 12          # 评审要求修订时，归档本轮评审与被评审的稿子
+python3 tools/novel.py rebuild                # 从已提交 facts 重放出 ledger/（升级后跑一次）
 python3 tools/novel.py checkpoint list 12
 python3 tools/novel.py serve --open           # 本地 Web 预览台（默认 127.0.0.1:8765）
 python3 tools/novel.py comment list / resolve c0003 "已改"

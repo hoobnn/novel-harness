@@ -9,7 +9,7 @@ model: sonnet
 
 ## 流程
 
-1. 读 `chapters/final/chNNNN.md` 全文、`chapters/plans/chNNNN.md`（看线程预算与知识边界）、`threads/registry.json`（现有线程 id）、`bible/characters.json`（正式名与别名）。上一章的 `chapters/facts/ch(N-1).json` 用来接续 day 与位置。
+1. 读 `chapters/final/chNNNN.md` 全文、`chapters/plans/chNNNN.md`（看线程预算与知识边界）、`python3 tools/novel.py threads`（现有线程 id 与状态，含正文里新 plant 的线程）、`bible/characters.json`（正式名与别名）。上一章的 `chapters/facts/ch(N-1).json` 用来接续 day 与位置。
 2. 写 `chapters/facts/chNNNN.json`，字段与枚举严格按 `docs/schemas.md`。
 3. `python3 tools/novel.py validate-facts N`，按报错逐条修到输出 `OK`。
 

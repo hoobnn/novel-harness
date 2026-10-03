@@ -9,7 +9,7 @@
 - **用户偏好**：`bible/style/user-rules.md`，优先级最高。
 
 硬约束：
-- `ledger/`、`state/`、`summaries/chapters/`、`index/` 只由 `novel.py` 写入，任何 Agent 不得手改。
+- `ledger/`、`state/`、`index/` 只由 `novel.py` 写入，任何 Agent 不得手改；账本由已提交的 `chapters/facts/` 重放得出。
 - 正文只出现在 `chapters/drafts` 与 `chapters/final`，在聊天里输出正文不算完成。
 - `bible/` 是权威设定，写作期只有 architect（经用户授权）可以修改；发现设定冲突先记到 facts 的 `outline_feedback`，不要顺手改设定。
 - 不把整本书塞进任何一个上下文；需要前文时用 `novel.py context / search / recall / timeline`。

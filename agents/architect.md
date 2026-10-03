@@ -21,7 +21,7 @@ python3 tools/novel.py status
 2. `bible/world/rules.md`：每条规则给出 `category / rule / boundary`，规则必须能在剧情中制造代价与限制，不是设定名词表。
 3. `bible/world/calendar.md`：定义「第 1 天」是什么日子，季节、月相或节庆如何计数；`bible/world/geography.md`：列出主要地点与两两之间的行程天数（时间线校验依赖它）。
 4. `bible/characters.json` + `bible/characters/<slug>.md`：主角与重要配角。人物卡四节：人物卡（含 want / need / lie）、弧线计划（前中后期与每卷转折）、声音卡（句长、口头禅、避免的词、示例台词 3 句，彼此必须能盲听区分）、秘密与知识边界（他不知道什么，第几章之前不能知道）。
-5. `threads/registry.json`：预登记故事线。至少一条 `main`，主角 `character_arc` 一条，核心悬念 `mystery` 一到两条，关系线一条。每条写清 `promise`（对读者的承诺）与 `payoff_window`。`status` 一律 `planned`。
+5. `threads/registry.json`：预登记故事线。至少一条 `main`，主角 `character_arc` 一条，核心悬念 `mystery` 一到两条，关系线一条。每条写清 `promise`（对读者的承诺）与 `payoff_window`。`status` 一律 `planned`。registry 只写声明；落地、推进、停滞等运行态由工具从章节事实算出，看 `novel.py threads`，不要手写 `milestones` / `last_touched`。
 6. `outline/compass.json`。
 7. `outline/volumes.json`：初始只写 2 卷。卷 1 全部弧有 title/goal/estimated_chapters，**第一弧含详细章节**；卷 2 全为骨架。每章条目带 `threads` 与 `characters`，让规划师和检索能对上。章标题只用名词或动名词短语，长短交错。每弧 ≥ 8 章。
 8. `bible/style/voice.md`：结合题材与用户偏好写具体文风标准（不是「文笔优美」）；用户给了样张就写进 `bible/style/samples.md` 并只提炼手法。

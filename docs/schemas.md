@@ -21,19 +21,19 @@ bible/                     静态设定（权威，改动需人工确认）
 outline/
   compass.json             指南针：终局方向 / 活跃长线 / 规模估计
   volumes.json             分层大纲：卷 → 弧 → 章
-threads/registry.json      故事线注册表
-ledger/                    动态事实（只由 novel.py commit 写入）
+threads/registry.json      故事线声明（architect 写；运行态在 ledger/threads.json）
+ledger/                    动态事实：由已提交 facts 重放得出（commit / rebuild 写入，可随时重算）
   timeline.jsonl / knowledge.jsonl / state_changes.jsonl
-  relationships.json / cast.json / characters/<slug>.json（状态投影）
+  relationships.json / cast.json / threads.json / characters/<slug>.json（状态投影）
 chapters/
   plans/chNNNN.md          章节计划（节拍表 + 契约 + 线程预算）
   drafts/chNNNN.md         草稿（写手/修订者写入）
   reviews/chNNNN.json      编辑评审（当前轮，含 round）
   reviews/chNNNN.check.json 连续性检查结论（checker 产出，当前轮）
-  reviews/chNNNN.rK.json / chNNNN.rK.check.json  第 K 轮的归档（next-round 产生）
+  reviews/chNNNN.rK.json / .rK.check.json / .rK.draft.md  第 K 轮的评审、检查与被评审稿子的归档（next-round 产生）
   final/chNNNN.md          定稿（finalize 后）
   facts/chNNNN.json        章节事实（账本员抽取，commit 时校验）
-summaries/chapters|arcs|volumes/
+summaries/arcs|volumes/       editor 产出的弧摘要与卷摘要
 state/progress.json        唯一进度事实源；state/decisions.jsonl 决策审计
 state/comments.json        预览台批注（novel.py 写入：serve 与 comment 命令）
 state/checkpoints.jsonl    步级进度（哪章哪步何时完成），崩溃后据此续跑；只记事实不参与路由
@@ -96,14 +96,16 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
 {"ending_direction":"…","open_threads":["T01","T03"],"estimated_scale":"预计 4-6 卷","last_updated":0}
 ```
 
-## threads/registry.json（故事线）
+## threads/registry.json（故事线声明）
 
 ```json
 [{"id":"T01","title":"炉底的字","type":"mystery","status":"planned",
-  "characters":["林越"],"planted_at":null,"last_touched":null,
-  "promise":"炉底刻字指向林越身世","payoff":null,"payoff_window":[5,12],
-  "milestones":[{"chapter":1,"action":"plant","note":"…"}]}]
+  "characters":["林越"],"promise":"炉底刻字指向林越身世","payoff_window":[5,12]}]
 ```
+
+registry 只写声明，由 architect 维护。运行态由 facts 重放得出，落在 `ledger/threads.json`：每条线程在声明字段之外多出
+`planted_at` / `last_touched` / `milestones`（`[{"chapter":1,"action":"plant","note":"…"}]`）/ `payoff` / `resolved_at`，
+正文里 `plant` 出的新线程也只出现在这里。查看用 `novel.py threads`。
 
 - `type`: main / subplot / mystery / relationship / foreshadow / character_arc / world
 - `status`: planned（架构师预登记，尚未在正文出现）/ active / dormant / resolved / abandoned
@@ -153,6 +155,7 @@ index/novel.sqlite         全文索引（bigram 分词，可随时 reindex 重�
   跳变 ≥2 时 `check` 会给 checker 一条 warning，要求确认正文有足够事件支撑。
   关系突变请拆成多章推进，不要一章从死敌变挚友。
 - `knowledge.status`: knows / suspects / believes_false / forgot
+- `commit` 会往 facts 写入 `committed_sha` / `committed_at` / `present`（本章出场的有名角色），并给没有 id 的 `plant` 分配线程 id。只有带 `committed_sha` 的 facts 参与账本重放。
 - `hook_type`: crisis / reveal / choice / interrupted_action / identity / clue / deadline / emotional_aftermath / relationship_shift / quiet
 - `scenes[].characters` 只列有名角色；无名群众不列。新配角必须同时出现在 `cast_intros`。
 - 校验命令：`python3 tools/novel.py validate-facts N`
@@ -172,7 +175,9 @@ verdict 规则：有 critical → rewrite；无 critical 有 error → polish；
 
 该规则由 `novel.py` 的 `effective_verdict()` 从 `issues` 反推校验：若声明的 verdict 比反推结果宽松，以反推结果为准（例如 issues 里有 critical 却写 accept，按 rewrite 处理）。
 
-round 由文件推出：当前轮 = 已归档的 `chNNNN.rK.json` 个数 + 1，`route` 在 `checker+editor` / `writer:revise` 里给出，上下文包也会写明。写手修订后由主会话运行 `novel.py next-round N`：先 lint 修订稿，通过后把本轮 `chNNNN.json` 与 `chNNNN.check.json` 改名为 `chNNNN.rK.json` / `chNNNN.rK.check.json`，路由随即进入第 K+1 轮。不要手删 review。
+round 由文件推出：当前轮 = 已归档的 `chNNNN.rK.json` 个数 + 1，`route` 在 `checker+editor` 里给出，上下文包也会写明。评审要求修订时 `route` 先给 `next-round`：主会话运行 `novel.py next-round N`，把被评审的稿子另存为 `chNNNN.rK.draft.md`，再把本轮 `chNNNN.json` 与 `chNNNN.check.json` 改名为 `chNNNN.rK.json` / `chNNNN.rK.check.json`。之后草稿与 `rK.draft.md` 一字不差时路由为 `writer:revise`（`route.review` 指向归档评审），写手改过后进入第 K+1 轮 `checker+editor`。不要手删 review。
+
+verdict 由 `effective_verdict()` 合并 review 的 issues 与 check.json 的 findings 推出：checker 报了 critical，即使 editor 没看到 check.json，本轮也按 rewrite 处理。
 
 第 1 轮为 `polish` / `rewrite` 时修订一次；第 2 轮仍为 `polish` 则强制 finalize，把遗留问题写进 `outline_feedback`；仍为 `rewrite` 时 `route` 返回 `blocked`，主会话必须停下询问用户。
 
@@ -180,7 +185,6 @@ round 由文件推出：当前轮 = 已归档的 `chNNNN.rK.json` 个数 + 1，`
 
 ## summaries
 
-- `summaries/chapters/chNNNN.json` 由 commit 自动生成。
 - `summaries/arcs/v1a2.json`: `{"volume":1,"arc":2,"title":"…","summary":"300-500 字","key_events":[],"character_snapshots":[{"name":"…","status":"…","motivation":"…","relations":"…"}],"style_rules":{"prose":[],"dialogue":[{"name":"…","rules":[]}],"taboos":[]},"open_questions":[]}`
 - `summaries/volumes/v1.json`: `{"volume":1,"title":"…","summary":"500-800 字","key_events":[],"threads_resolved":[],"threads_carried":[]}`
 

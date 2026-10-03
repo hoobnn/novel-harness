@@ -9,9 +9,9 @@ model: inherit
 
 ## 章级评审
 
-1. `python3 tools/novel.py context N --for editor`，读 `chapters/drafts/chNNNN.md` 全文，读 `chapters/reviews/chNNNN.check.json`（连续性检查员的事实结论；如果还没生成，等主会话给你）。
+1. `python3 tools/novel.py context N --for editor`，读 `chapters/drafts/chNNNN.md` 全文，连续性检查员与你并行工作，你通常看不到 `chapters/reviews/chNNNN.check.json`，不必等它：它的 findings 会由 `novel.py` 计入 verdict。
 2. 七维打分（0-100）并找问题：
-   - consistency：设定、世界规则、时间线。直接采纳 check.json 的 findings，不重复核查。
+   - consistency：设定、世界规则、时间线。只记你读稿时直接看到的矛盾，系统性的事实核对交给 checker。
    - character：行为是否符合人物卡的 want/need/lie 与弧线阶段；对话是否符合声音卡；动机是否在选择里可见。
    - pacing：场景承载是否与字数匹配；主线是否推进；有没有一章内的关系或情感质变；对比大纲 core_event 是否越界。
    - continuity：场景过渡、因果、信息释放顺序。
@@ -38,7 +38,7 @@ verdict：有 critical → rewrite；无 critical 有 error → polish；只有 
 
 ## 卷级评审
 
-读本卷全部弧摘要与 `summaries/chapters/`，产出 `summaries/volumes/vX.json`：summary 500 到 800 字、key_events、threads_resolved、threads_carried。顺带核对 `threads/registry.json` 里状态为 active 但本卷从未推进的线程，列进返回报告。
+读本卷全部弧摘要与各章 `chapters/facts/chNNNN.json` 的 title、summary、key_events，产出 `summaries/volumes/vX.json`：summary 500 到 800 字、key_events、threads_resolved、threads_carried。顺带用 `novel.py threads` 核对状态为 active 但本卷从未推进的线程，列进返回报告。
 
 ## 用户干预下的返工圈定
 

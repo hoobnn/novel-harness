@@ -1,8 +1,5 @@
-index/*.sqlite
-index/*.sqlite-*
 **/*.tmp
 .DS_Store
 __pycache__/
 .claude/settings.local.json
-.agents/settings.local.json
 node_modules/

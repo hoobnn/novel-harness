@@ -73,8 +73,12 @@ novel-harness（本仓库，装一次）          my-novel/（每部小说一个
 ├── tools/novel.py                      ├── tools/novel.py              ┘
 ├── docs/        protocol + schemas     ├── bible/ outline/ threads/   权威设定（architect 写）
 └── templates/workspace/  种子文件      ├── chapters/ plans drafts reviews final facts
-                                        └── ledger/ state/ summaries/ index/   只由 novel.py 写
+                                        ├── summaries/ arcs volumes   弧摘要与卷摘要（editor 写）
+                                        └── ledger/ state/ index/   只由 novel.py 写
 ```
+
+`ledger/` 是已提交章节 `chapters/facts/` 的派生视图：每次 commit 都从全部 facts 重放一遍，重提旧章不会重复记账，
+给第 N 章装上下文时也只用到第 N-1 章为止的账本。`novel.py rebuild` 随时可以从 facts 重算。
 
 每个工作区自带一份 `tools/novel.py` 和数据契约，版本和它的数据格式对应。插件升级不会改变已有小说的行为，
 想升级时在工作区里运行 `python3 <插件目录>/tools/novel.py upgrade`。
@@ -192,9 +196,10 @@ python3 tools/novel.py timeline --entity 林越     # 时间线查询
 python3 tools/novel.py threads --stale           # 停滞与超期的故事线
 python3 tools/novel.py check 12                  # 连续性检查
 python3 tools/novel.py lint 12                   # 文体机械检查
-python3 tools/novel.py next-round 12             # 修订稿通过 lint 后进入下一轮评审
+python3 tools/novel.py next-round 12             # 评审要求修订时归档本轮评审，交写手修订
 python3 tools/novel.py stylestat                 # 全书文体统计
-python3 tools/novel.py commit 12                 # 提交定稿并更新账本
+python3 tools/novel.py commit 12                 # 提交定稿并重放账本
+python3 tools/novel.py rebuild                   # 从已提交的 facts 重算 ledger/
 python3 <插件目录>/tools/novel.py upgrade        # 刷新工作区的 novel.py / 钩子 / 契约
 ```
 

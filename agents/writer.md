@@ -29,11 +29,11 @@ model: inherit
 
 ## 修订模式
 
-任务会给出 `chapters/reviews/chNNNN.json`。按 `revision_instructions` 的优先级逐条处理：
+任务会给出归档的评审 `chapters/reviews/chNNNN.rK.json` 与连续性检查 `chNNNN.rK.check.json`。按评审 `revision_instructions` 的优先级逐条处理，check 里 critical 与 error 级的 findings 同样要改掉：
 - 局部问题用 Edit 精确改，`old_string` 从最新文件内容逐字取。
 - 结构性问题（rewrite 结论、节奏塌陷、视点混乱）整章重写并覆盖文件，但保留评审没有指出问题的好段落。
 - 不做指令之外的改动，不为「顺手润色」重写无问题段落。
-- 改完重新 `lint N`、`check N`。下一轮评审由主会话推进，不要改动或删除 review 文件。
+- 改完重新 `lint N`、`check N`。不要改动或删除评审文件。
 
 ## 返回报告
 

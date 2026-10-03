@@ -79,8 +79,13 @@ novel-harness (this repo, install once)  my-novel/ (one folder per novel, create
 ├── tools/novel.py                      ├── tools/novel.py                 ┘
 ├── docs/        protocol + schemas     ├── bible/ outline/ threads/   canon (written by architect)
 └── templates/workspace/  seed files    ├── chapters/ plans drafts reviews final facts
-                                        └── ledger/ state/ summaries/ index/   written by novel.py only
+                                        ├── summaries/ arcs volumes   arc and volume summaries (editor)
+                                        └── ledger/ state/ index/   written by novel.py only
 ```
+
+`ledger/` is derived from the committed `chapters/facts/`: every commit replays all facts, so recommitting an old
+chapter never double-counts, and the context pack for chapter N only sees the ledger up to chapter N-1.
+`novel.py rebuild` recomputes it from facts at any time.
 
 Each workspace carries its own copy of `tools/novel.py` and the data contract, matching its data format.
 Updating the plugin won't change how an existing novel behaves; run
@@ -202,9 +207,10 @@ python3 tools/novel.py timeline --entity 林越     # timeline for an entity
 python3 tools/novel.py threads --stale           # stalled and overdue threads
 python3 tools/novel.py check 12                  # continuity check
 python3 tools/novel.py lint 12                   # mechanical style check
-python3 tools/novel.py next-round 12             # move to the next review round once the revision lints clean
+python3 tools/novel.py next-round 12             # archive the current review before the writer revises
 python3 tools/novel.py stylestat                 # style stats for the whole book
-python3 tools/novel.py commit 12                 # commit a final chapter and update ledgers
+python3 tools/novel.py commit 12                 # commit a final chapter and replay the ledgers
+python3 tools/novel.py rebuild                   # recompute ledger/ from committed facts
 python3 <plugin dir>/tools/novel.py upgrade      # refresh the workspace's novel.py / hooks / contract
 ```
 

@@ -23,7 +23,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 WORKSPACE_MARKER = "state/progress.json"      # 有它才算小说工作区
 HARNESS_ROOT = Path(__file__).resolve().parent.parent   # 本文件所在的 harness（插件目录或工作区）
 VENDORED = [                                   # 随 harness 版本走、init 复制进工作区、upgrade 刷新
@@ -91,13 +91,13 @@ P = {
     "state_changes": ROOT / "ledger/state_changes.jsonl",
     "relationships": ROOT / "ledger/relationships.json",
     "cast": ROOT / "ledger/cast.json",
+    "ledger_threads": ROOT / "ledger/threads.json",
     "char_state_dir": ROOT / "ledger/characters",
     "plans": ROOT / "chapters/plans",
     "drafts": ROOT / "chapters/drafts",
     "final": ROOT / "chapters/final",
     "facts": ROOT / "chapters/facts",
     "reviews": ROOT / "chapters/reviews",
-    "sum_ch": ROOT / "summaries/chapters",
     "sum_arc": ROOT / "summaries/arcs",
     "sum_vol": ROOT / "summaries/volumes",
     "db": ROOT / "index/novel.sqlite",
@@ -265,14 +265,14 @@ def load_characters() -> list[dict]:
     return read_json(P["characters"], [])
 
 
-def entity_names() -> dict[str, str]:
-    """别名 -> 正式名 的映射，含核心角色与已登记配角。"""
+def entity_names(cast: dict | None = None) -> dict[str, str]:
+    """别名 -> 正式名 的映射，含核心角色与已登记配角（默认取全部已提交章的配角）。"""
     m: dict[str, str] = {}
     for c in load_characters():
         m[c["name"]] = c["name"]
         for a in c.get("aliases", []) or []:
             m[a] = c["name"]
-    for name in read_json(P["cast"], {}):
+    for name in (project()["cast"] if cast is None else cast):
         m.setdefault(name, name)
     return m
 
@@ -460,13 +460,13 @@ def foundation_missing() -> list[str]:
     return missing
 
 
-def effective_verdict(review: dict) -> str:
-    """按 docs/schemas.md 的规则从 issues 反推 verdict，取与声明值中更严格的一个。
+def effective_verdict(review: dict, check: dict | None = None) -> str:
+    """按 docs/schemas.md 的规则从 issues 与 checker findings 反推 verdict，取与声明值中更严格的一个。
 
-    editor 可能给出与 issues 不符的 verdict（有 critical 却写 accept），
-    这是能用代码判定的事，不依赖角色自觉。
+    editor 可能给出与 issues 不符的 verdict（有 critical 却写 accept）；checker 与 editor 并行，
+    editor 看不到 check.json。两者的严重度都在这里合并，不靠主会话手工改 review。
     """
-    sev = {i.get("severity") for i in review.get("issues", [])}
+    sev = {i.get("severity") for i in review.get("issues", []) + (check or {}).get("findings", [])}
     derived = "rewrite" if "critical" in sev else "polish" if "error" in sev else "accept"
     rank = {"accept": 0, "polish": 1, "rewrite": 2}
     declared = review.get("verdict", "accept")
@@ -530,6 +530,13 @@ def route(p: dict) -> dict:
     review = read_json(ch_path("reviews", n, "json"), None)
     check = read_json(P["reviews"] / f"{ch_name(n)}.check.json", None)
     rnd = review_round(n)
+    if review is None and rnd > 1:
+        # next-round 归档时存了被评审的那版稿子；草稿与它一字不差，说明写手还没按上一轮评审改
+        snap = P["reviews"] / f"{ch_name(n)}.r{rnd - 1}.draft.md"
+        if snap.exists() and read_text(snap) == read_text(ch_path("drafts", n, "md")):
+            return {"action": "writer:revise", "chapter": n, "round": rnd - 1, "reason": f"按第 {rnd - 1} 轮评审修订",
+                    "review": f"chapters/reviews/{ch_name(n)}.r{rnd - 1}.json",
+                    "check": f"chapters/reviews/{ch_name(n)}.r{rnd - 1}.check.json"}
     if review is None or check is None:
         missing_side = []
         if check is None:
@@ -539,13 +546,12 @@ def route(p: dict) -> dict:
         return {"action": "checker+editor", "chapter": n, "round": rnd,
                 "reason": "草稿待检查与评审" if rnd == 1 else f"修订稿待第 {rnd} 轮检查与评审",
                 "missing": missing_side}
-    verdict = effective_verdict(review)
+    verdict = effective_verdict(review, check)
     if verdict == "rewrite" and rnd >= 2:
         return {"action": "blocked", "chapter": n, "round": rnd,
                 "reason": "修订后第 2 轮评审仍为 rewrite，需停下询问用户"}
     if verdict in ("rewrite", "polish") and rnd < 2:
-        return {"action": "writer:revise", "chapter": n, "round": rnd, "reason": f"第 {rnd} 轮评审结论 {verdict}",
-                "then": f"修订稿 lint 通过后运行 novel.py next-round {n}，归档本轮评审并进入第 {rnd + 1} 轮"}
+        return {"action": "next-round", "chapter": n, "round": rnd, "reason": f"第 {rnd} 轮评审结论 {verdict}，归档后交写手修订"}
     if not ch_path("final", n, "md").exists():
         return {"action": "finalize", "chapter": n, "reason": "评审通过，草稿待定稿"}
     if not ch_path("facts", n, "json").exists():
@@ -553,14 +559,155 @@ def route(p: dict) -> dict:
     return {"action": "commit", "chapter": n, "reason": "事实已抽取，待提交"}
 
 
-# ---------------------------------------------------------------- threads
-def load_threads() -> list[dict]:
-    return read_json(P["threads"], [])
+# ---------------------------------------------------------------- ledger projection
+# 账本是 facts 的派生视图：按章重放已提交的 chapters/facts/*.json 得到时间线、知识、状态、关系、
+# 配角与线程运行态。commit 只负责校验并给 facts 盖章，然后整体重放落盘到 ledger/。
+# 这样重提旧章（commit --force）不会重复追加，给第 N 章装上下文时也能只看第 N-1 章为止的世界。
+THREAD_RUNTIME = ("milestones", "last_touched", "planted_at", "resolved_at", "payoff")
+_PROJECTIONS: dict = {}
 
 
-def thread_view(last_committed: int, stale_after: int) -> list[dict]:
+def new_char_state(name: str) -> dict:
+    return {"name": name, "location": None, "fields": {}, "knowledge": [],
+            "relations": {}, "first_seen": None, "last_seen": None, "appearances": 0}
+
+
+def thread_declarations() -> list[dict]:
+    """threads/registry.json 是 architect 的声明；剥掉运行字段，运行态全由重放得出。
+
+    0.4 及以前 commit 会把运行字段写回 registry：带 planted_at 的线程当作尚未落地的
+    planned 声明，重放到它的 plant 时再激活，新旧工作区都能对上。
+    """
     out = []
-    for t in load_threads():
+    for t in read_json(P["threads"], []):
+        d = {k: v for k, v in t.items() if k not in THREAD_RUNTIME}
+        if t.get("planted_at"):
+            d["status"] = "planned"
+        out.append(d)
+    return out
+
+
+def committed_facts(upto: int | None = None) -> list[tuple[int, dict]]:
+    rows = []
+    for f in sorted(P["facts"].glob("ch*.json")):
+        m = re.fullmatch(r"ch(\d{4})", f.stem)
+        if not m or (upto is not None and int(m.group(1)) > upto):
+            continue
+        facts = read_json(f, None)
+        if facts and facts.get("committed_sha"):
+            rows.append((int(m.group(1)), facts))
+    return rows
+
+
+def chapter_present(n: int, facts: dict, cast: dict) -> set[str]:
+    """本章出场的有名角色。commit 时算好存进 facts.present；旧 facts 没有就从定稿现算。"""
+    if isinstance(facts.get("present"), list):
+        present = set(facts["present"])
+    else:
+        present = set(mentions(read_text(ch_path("final", n, "md")), entity_names(cast)))
+    for sc in facts.get("scenes", []):
+        present.update(sc.get("characters", []))
+    return present
+
+
+def apply_chapter(L: dict, n: int, facts: dict) -> None:
+    """把一章事实叠加到投影上。账本更新只有这一个实现。"""
+    cast, chars, by_id = L["cast"], L["chars"], {t["id"]: t for t in L["threads"]}
+
+    def st(name: str) -> dict:
+        return chars.setdefault(name, new_char_state(name))
+
+    for c in facts.get("cast_intros", []):
+        cast.setdefault(c["name"], {"brief_role": c.get("brief_role", ""), "first_seen": n, "last_seen": n, "count": 0})
+    present = chapter_present(n, facts, cast)
+    for name in present:
+        if name in cast:
+            cast[name]["last_seen"] = n
+            cast[name]["count"] = cast[name].get("count", 0) + 1
+        s = st(name)
+        s["first_seen"] = s.get("first_seen") or n
+        s["last_seen"] = n
+        s["appearances"] = s.get("appearances", 0) + 1
+    t = facts["time"]
+    for sc in facts.get("scenes", []):
+        L["timeline"].append({"chapter": n, "day": sc.get("day", t["day_start"]), "time_of_day": sc.get("time_of_day", ""),
+                              "location": sc.get("location", ""), "event": sc.get("summary", ""),
+                              "characters": sc.get("characters", []), "scene_id": sc.get("id")})
+    L["timeline"] += [{"chapter": n, **e} for e in facts.get("timeline_extra", [])]
+    for k in facts.get("knowledge", []):
+        L["knowledge"].append({"chapter": n, **k})
+        st(k["who"])["knowledge"].append({"chapter": n, "fact": k["fact"], "status": k["status"], "source": k.get("source", "")})
+    for c in facts.get("state_changes", []):
+        L["state_changes"].append({"chapter": n, **c})
+        st(c["entity"])["fields"][c["field"]] = c["new"]
+    for who, loc in (facts.get("locations_end") or {}).items():
+        st(who)["location"] = loc
+    for r in facts.get("relationships", []):
+        key = "|".join(sorted([r["a"], r["b"]]))
+        ent = L["relationships"].setdefault(key, {"a": r["a"], "b": r["b"], "relation": "", "trust": None, "history": []})
+        ent["relation"] = r["relation"]
+        ent["chapter"] = n
+        if r.get("trust") is not None:
+            ent["trust"] = r["trust"]
+        ent["history"].append({"chapter": n, "relation": r["relation"], "delta": r.get("delta", ""), "trust": r.get("trust")})
+        for a, b in ((r["a"], r["b"]), (r["b"], r["a"])):
+            st(a)["relations"][b] = f"{r['relation']}（信任 {r['trust']:+d}）" if r.get("trust") is not None else r["relation"]
+    for u in facts.get("threads", []):
+        th = by_id.get(u.get("id"))
+        if u["action"] == "plant" and th is None:
+            th = {"id": u["id"], "title": u.get("title", ""), "type": u.get("type", ""), "status": "active",
+                  "characters": u.get("characters", []), "promise": u.get("promise", ""), "payoff": None,
+                  "payoff_window": u.get("payoff_window")}
+            L["threads"].append(th)
+            by_id[th["id"]] = th
+        if th is None:
+            continue
+        th["last_touched"] = n
+        th.setdefault("milestones", []).append({"chapter": n, "action": u["action"], "note": u.get("note", "")})
+        if u["action"] == "plant":
+            th["planted_at"] = n
+            th["status"] = "active"
+        elif u["action"] == "resolve":
+            th.update(status="resolved", payoff=u.get("note", ""), resolved_at=n)
+        elif u["action"] == "abandon":
+            th["status"] = "abandoned"
+        elif th["status"] in ("planned", "dormant"):
+            th["status"] = "active"
+
+
+def project(upto: int | None = None) -> dict:
+    """重放第 1..upto 章（None 为全部已提交章）的事实，返回内存中的账本投影。"""
+    if upto not in _PROJECTIONS:
+        L = {"timeline": [], "knowledge": [], "state_changes": [], "relationships": {}, "cast": {}, "chars": {},
+             "threads": thread_declarations()}
+        for n, facts in committed_facts(upto):
+            apply_chapter(L, n, facts)
+        _PROJECTIONS[upto] = L
+    return _PROJECTIONS[upto]
+
+
+def write_ledger(L: dict) -> None:
+    """把投影落盘到 ledger/，给人、预览台与 grep 看；代码读投影不读这些文件。"""
+    for key in ("timeline", "knowledge", "state_changes"):
+        P[key].parent.mkdir(parents=True, exist_ok=True)
+        P[key].write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in L[key]), encoding="utf-8")
+    write_json(P["relationships"], L["relationships"])
+    write_json(P["cast"], L["cast"])
+    write_json(P["ledger_threads"], L["threads"])
+    P["char_state_dir"].mkdir(parents=True, exist_ok=True)
+    for f in P["char_state_dir"].glob("*.json"):
+        f.unlink()
+    for name, st in L["chars"].items():
+        write_json(char_state_path(name), st)
+
+
+def load_threads(upto: int | None = None) -> list[dict]:
+    return project(upto)["threads"]
+
+
+def thread_view(last_committed: int, stale_after: int, threads: list[dict] | None = None) -> list[dict]:
+    out = []
+    for t in (load_threads() if threads is None else threads):
         t = dict(t)
         lt = t.get("last_touched") or t.get("planted_at") or 0
         t["idle"] = last_committed - lt if lt else None
@@ -572,14 +719,12 @@ def thread_view(last_committed: int, stale_after: int) -> list[dict]:
     return out
 
 
-# ---------------------------------------------------------------- character projection
 def char_state_path(name: str) -> Path:
     return P["char_state_dir"] / f"{slugify(name)}.json"
 
 
-def load_char_state(name: str) -> dict:
-    return read_json(char_state_path(name), {"name": name, "location": None, "fields": {}, "knowledge": [],
-                                             "relations": {}, "first_seen": None, "last_seen": None, "appearances": 0})
+def char_state(name: str, L: dict) -> dict:
+    return L["chars"].get(name) or new_char_state(name)
 
 
 def character_card(name: str) -> str:
@@ -593,7 +738,8 @@ def character_card(name: str) -> str:
 # ---------------------------------------------------------------- facts validation
 def validate_facts(n: int, facts: dict) -> list[str]:
     errs: list[str] = []
-    names = entity_names()
+    L = project(n - 1)   # 只对照本章之前的世界：重提旧章时不受后文影响
+    names = entity_names(L["cast"])
     known = set(names.values())
     new_cast = {c["name"] for c in facts.get("cast_intros", []) if c.get("name")}
     for k in ("title", "summary", "key_events", "scenes", "threads", "time"):
@@ -620,13 +766,14 @@ def validate_facts(n: int, facts: dict) -> list[str]:
         for c in s.get("characters", []):
             if c not in known and c not in new_cast:
                 errs.append(f"scenes[{i}] 角色「{c}」不在 characters.json / cast 中；若是新配角请写入 cast_intros，若是无名群众请不要列出")
-    tids = {t["id"] for t in load_threads()}
+    later = {t["id"] for t in load_threads()}   # 后文章节落地的线程 id 也算已占用
+    tids = {t["id"] for t in L["threads"]}
     for i, u in enumerate(facts.get("threads", [])):
         if u.get("action") not in THREAD_ACTIONS:
             errs.append(f"threads[{i}].action 非法: {u.get('action')}")
         if u.get("action") == "plant":
-            planned = {t["id"]: t for t in load_threads() if t.get("status") == "planned"}
-            if u.get("id") and u["id"] in tids and u["id"] not in planned:
+            planned = {t["id"]: t for t in L["threads"] if t.get("status") == "planned"}
+            if u.get("id") and u["id"] in (tids | later) and u["id"] not in planned:
                 errs.append(f"threads[{i}] plant 的 id {u['id']} 已存在且不是 planned 状态，应改用 advance/touch")
             if u.get("id") in planned:
                 continue  # 预登记线程首次落地：沿用 registry 中的 title/type/promise
@@ -647,7 +794,7 @@ def validate_facts(n: int, facts: dict) -> list[str]:
     for i, c in enumerate(facts.get("state_changes", [])):
         if not (c.get("entity") and c.get("field") and c.get("new")):
             errs.append(f"state_changes[{i}] 需要 entity/field/new")
-    rel_ledger = read_json(P["relationships"], {})
+    rel_ledger = L["relationships"]
     for i, r in enumerate(facts.get("relationships", [])):
         if not (r.get("a") and r.get("b") and r.get("relation")) or r.get("a") == r.get("b"):
             errs.append(f"relationships[{i}] 需要 a/b/relation 且 a≠b")
@@ -876,29 +1023,29 @@ def stylestat(upto: int | None = None) -> dict:
 def check_chapter(n: int, facts: dict | None) -> dict:
     """事实层连续性检查。facts 可为 None（只检查文本层面）。"""
     text = read_text(ch_path("drafts", n, "md")) or read_text(ch_path("final", n, "md"))
-    names = entity_names()
+    L = project(n - 1)
+    names = entity_names(L["cast"])
     findings: list[dict] = []
-    p = load_progress()
     rules = style_rules()
     present = mentions(text, names)
     # 位置连续性：上章末位置 vs 本章首个场景位置
     if facts:
         first_scene = (facts.get("scenes") or [{}])[0]
         for who in first_scene.get("characters", []):
-            st = load_char_state(who)
+            st = char_state(who, L)
             if st.get("location") and first_scene.get("location") and st["location"] != first_scene["location"]:
                 findings.append({"kind": "location", "severity": "warning",
                                  "msg": f"「{who}」上章末在「{st['location']}」，本章开场在「{first_scene['location']}」，正文需有位移交代或本章 time 上留出行程"})
         # 已死亡/离场角色再出场
         for who in present:
-            st = load_char_state(who)
+            st = char_state(who, L)
             status = (st.get("fields") or {}).get("status", "")
             if status and any(k in status for k in ("死亡", "已死", "身亡")):
                 findings.append({"kind": "status", "severity": "critical", "msg": f"「{who}」状态为「{status}」，本章正文仍提及，请确认是回忆/尸体/误判"})
         # 知识越界：本章 knowledge 里 knows 的事实与账本 believes_false 冲突等交给 LLM；这里只提示可用账本
     # 关系突变：trust 跳变虽在 validate-facts 拦截，这里给 checker 一个更早的提示
     if facts:
-        rel_l = read_json(P["relationships"], {})
+        rel_l = L["relationships"]
         for r in facts.get("relationships", []):
             tr = r.get("trust")
             prev = rel_l.get("|".join(sorted([r.get("a", ""), r.get("b", "")])), {}).get("trust")
@@ -911,8 +1058,9 @@ def check_chapter(n: int, facts: dict | None) -> dict:
     touched = {u.get("id") for u in (facts or {}).get("threads", []) if u.get("id")} if facts else set()
     if facts and planned - touched:
         findings.append({"kind": "thread", "severity": "warning", "msg": f"计划中提到但事实未记录推进的线程: {sorted(planned - touched)}"})
-    stale = [t for t in thread_view(p["last_committed"], rules.get("thread_stale_after", 6)) if t["stale"]]
-    overdue = [t for t in thread_view(p["last_committed"], rules.get("thread_stale_after", 6)) if t["payoff_overdue"]]
+    tv = thread_view(n - 1, rules.get("thread_stale_after", 6), L["threads"])
+    stale = [t for t in tv if t["stale"]]
+    overdue = [t for t in tv if t["payoff_overdue"]]
     for t in stale:
         findings.append({"kind": "thread", "severity": "info", "msg": f"线程 {t['id']}「{t['title']}」已 {t['idle']} 章未推进"})
     for t in overdue:
@@ -952,10 +1100,10 @@ ROLE_NEEDS = {
 }
 
 
-def cast_line(kv: tuple[str, dict]) -> str:
+def cast_line(kv: tuple[str, dict], L: dict) -> str:
     """配角一行：登记信息 + 账本投影里的位置与状态字段（死亡、伤势、持有物都在 fields 里）。"""
     name, c = kv
-    st = load_char_state(name)
+    st = char_state(name, L)
     extra = []
     if st.get("location"):
         extra.append(f"位置 {st['location']}")
@@ -972,7 +1120,8 @@ def needs(role: str, section: str) -> bool:
 def build_context(n: int, role: str) -> str:
     p = load_progress()
     rules = style_rules()
-    names = entity_names()
+    L = project(n - 1)   # 第 N 章只看得到第 N-1 章为止的账本，返工旧章时不会混进后文状态
+    names = entity_names(L["cast"])
     entry = locate(n)
     out: list[str] = [f"# 第 {n} 章 上下文包（role={role}，生成于 {now()}）", ""]
     out.append(f"进度：已提交 {p['last_committed']} 章；gate={p['gate']}；phase={p['phase']}")
@@ -1003,7 +1152,7 @@ def build_context(n: int, role: str) -> str:
     else:
         out += ["", "## 位置与大纲", "（本章尚无大纲条目）"]
     # 停滞与超期线程放在最前面：只列在台账里时 planner 容易略过
-    tv = thread_view(p["last_committed"], rules.get("thread_stale_after", 6))
+    tv = thread_view(n - 1, rules.get("thread_stale_after", 6), L["threads"])
     alarm = [t for t in tv if t["status"] in ("active", "dormant", "planned") and (t["stale"] or t["payoff_overdue"])]
     if alarm and role in ("planner", "writer", "editor"):
         out += ["", "## ⚠ 线程警示（规划时优先自然安排 touch 或 advance；不动就在计划里写明理由）"]
@@ -1037,16 +1186,16 @@ def build_context(n: int, role: str) -> str:
         out.append(f"- 弧 v{a.get('volume')}a{a.get('arc')}《{a.get('title', '')}》：{a.get('summary', '')}")
     recent_n = 3 if p["last_committed"] > 50 else 5
     start = max(1, n - recent_n)
-    for m in range(start, n):
-        s = read_json(ch_path("sum_ch", m, "json"), None)
-        if s:
-            out.append(f"- 第 {m} 章《{s.get('title', '')}》[D{s.get('day_start')}–D{s.get('day_end')}]：{s.get('summary', '')}")
+    for m, f in committed_facts(n - 1):
+        if m >= start:
+            t = f.get("time", {})
+            out.append(f"- 第 {m} 章《{f.get('title', '')}》[D{t.get('day_start')}–D{t.get('day_end')}]：{f.get('summary', '')}")
     if n > 1 and needs(role, "prev_tail"):
         prev_text = read_text(ch_path("final", n - 1, "md"))
         if prev_text:
             out += ["", "## 上一章结尾（衔接语气与节奏，不要复述）", "```", tail(prev_text), "```"]
     # timeline
-    tl = read_jsonl(P["timeline"]) if needs(role, "timeline") else []
+    tl = L["timeline"] if needs(role, "timeline") else []
     if tl:
         out += ["", "## 时间线（最近事件）", f"日历规则见 bible/world/calendar.md。上章结束于故事第 {tl[-1].get('day')} 天。"]
         out.append(md_list(tl[-8:], lambda e: f"ch{e['chapter']} D{e.get('day')} {e.get('time_of_day', '')} @{e.get('location', '')}: {e['event']} [{','.join(e.get('characters', []))}]"))
@@ -1088,11 +1237,11 @@ def build_context(n: int, role: str) -> str:
             chars_in.update(t.get("characters", []))
     core = [c for c in load_characters() if c.get("tier", "core") in ("core",)]
     chars_in.update(c["name"] for c in core)
-    out += ["", "## 人物（当前状态投影 + 知识账本）", "完整人物卡：bible/characters/<slug>.md；需要更多时用 `novel.py character <名字>`。"]
+    out += ["", "## 人物（当前状态投影 + 知识账本）", f"完整人物卡：bible/characters/<slug>.md；需要更多时用 `novel.py recall --entity <名字> --before {n}`。"]
     for c in load_characters():
         if c["name"] not in chars_in:
             continue
-        st = load_char_state(c["name"])
+        st = char_state(c["name"], L)
         know = [k for k in st.get("knowledge", [])][-8:]
         out.append(f"### {c['name']}（{c.get('role', '')}，别名 {c.get('aliases', [])}）")
         out.append(f"- 位置：{st.get('location')}；最后出场 ch{st.get('last_seen')}；状态字段：{json.dumps(st.get('fields', {}), ensure_ascii=False)}")
@@ -1105,11 +1254,11 @@ def build_context(n: int, role: str) -> str:
             voice = re.search(r"##\s*声音卡\s*\n([\s\S]*?)(?=\n## |\Z)", card)
             if voice:
                 out.append("- 声音卡：\n" + "\n".join("  " + l for l in voice.group(1).strip().split("\n")))
-    cast = read_json(P["cast"], {})
+    cast = L["cast"]
     recent_cast = sorted(cast.items(), key=lambda kv: -(kv[1].get("last_seen") or 0))[:12] if needs(role, "cast") else []
     if recent_cast:
         out += ["", "## 近期活跃配角（再次出场前先 `novel.py recall --entity 名字` 找回口吻）"]
-        out.append(md_list(recent_cast, cast_line))
+        out.append(md_list(recent_cast, lambda kv: cast_line(kv, L)))
     # retrieval: related scenes
     if entry and p["last_committed"] > 0 and needs(role, "retrieval"):
         q_terms = set()
@@ -1196,113 +1345,24 @@ def commit(n: int, force: bool = False) -> None:
     if facts.get("committed_sha") == digest and not force:
         print(f"第 {n} 章已按相同正文提交过，跳过。")
         return
-    names = entity_names()
-    # cast
-    cast = read_json(P["cast"], {})
-    for c in facts.get("cast_intros", []):
-        cast.setdefault(c["name"], {"brief_role": c.get("brief_role", ""), "first_seen": n, "last_seen": n, "count": 0})
-    present = set(mentions(final, {**names, **{k: k for k in cast}}))
-    for s in facts.get("scenes", []):
-        present.update(s.get("characters", []))
-    for name in present:
-        if name in cast:
-            cast[name]["last_seen"] = n
-            cast[name]["count"] = cast[name].get("count", 0) + 1
-    write_json(P["cast"], cast)
-    # timeline
-    t = facts["time"]
-    tl_rows = []
-    for s in facts.get("scenes", []):
-        tl_rows.append({"chapter": n, "day": s.get("day", t["day_start"]), "time_of_day": s.get("time_of_day", ""),
-                        "location": s.get("location", ""), "event": s.get("summary", ""), "characters": s.get("characters", []),
-                        "scene_id": s.get("id")})
-    for e in facts.get("timeline_extra", []):
-        tl_rows.append({"chapter": n, **e})
-    append_jsonl(P["timeline"], tl_rows)
-    # knowledge / state changes
-    append_jsonl(P["knowledge"], [{"chapter": n, **k} for k in facts.get("knowledge", [])])
-    append_jsonl(P["state_changes"], [{"chapter": n, **c} for c in facts.get("state_changes", [])])
-    # relationships
-    rel = read_json(P["relationships"], {})
-    for r in facts.get("relationships", []):
-        key = "|".join(sorted([r["a"], r["b"]]))
-        ent = rel.setdefault(key, {"a": r["a"], "b": r["b"], "relation": "", "trust": None, "history": []})
-        ent["relation"] = r["relation"]
-        ent["chapter"] = n
-        if r.get("trust") is not None:
-            ent["trust"] = r["trust"]
-        ent["history"].append({"chapter": n, "relation": r["relation"],
-                               "delta": r.get("delta", ""), "trust": r.get("trust")})
-    write_json(P["relationships"], rel)
-    # character projections
-    for name in present:
-        st = load_char_state(name)
-        st["first_seen"] = st.get("first_seen") or n
-        st["last_seen"] = n
-        st["appearances"] = st.get("appearances", 0) + 1
-        write_json(char_state_path(name), st)
-    for who, loc in (facts.get("locations_end") or {}).items():
-        st = load_char_state(who)
-        st["location"] = loc
-        write_json(char_state_path(who), st)
-    for c in facts.get("state_changes", []):
-        st = load_char_state(c["entity"])
-        st.setdefault("fields", {})[c["field"]] = c["new"]
-        write_json(char_state_path(c["entity"]), st)
-    for k in facts.get("knowledge", []):
-        st = load_char_state(k["who"])
-        st.setdefault("knowledge", []).append({"chapter": n, "fact": k["fact"], "status": k["status"], "source": k.get("source", "")})
-        write_json(char_state_path(k["who"]), st)
-    for r in facts.get("relationships", []):
-        for a, b in ((r["a"], r["b"]), (r["b"], r["a"])):
-            st = load_char_state(a)
-            st.setdefault("relations", {})[b] = (
-                f"{r['relation']}（信任 {r['trust']:+d}）" if r.get("trust") is not None else r["relation"])
-            write_json(char_state_path(a), st)
-    # threads
-    threads = load_threads()
-    by_id = {x["id"]: x for x in threads}
+    # 出场角色与新线程 id 只在提交时算一次，写进 facts，重放时直接复用
+    before = project(n - 1)
+    cast = {**before["cast"], **{c["name"]: {} for c in facts.get("cast_intros", []) if c.get("name")}}
+    facts["present"] = sorted(mentions(final, entity_names(cast)))
+    used = {t["id"] for t in load_threads()} | {t["id"] for t in before["threads"]}
     for u in facts.get("threads", []):
-        if u["action"] == "plant" and u.get("id") in by_id and by_id[u["id"]].get("status") == "planned":
-            th = by_id[u["id"]]
-            th.update(status="active", planted_at=n, last_touched=n)
-            th.setdefault("milestones", []).append({"chapter": n, "action": "plant", "note": u.get("note", "")})
-        elif u["action"] == "plant":
-            tid = u.get("id") or f"T{len(threads) + 1:02d}"
-            while tid in by_id:
-                tid = f"T{int(tid[1:]) + 1:02d}"
-            th = {"id": tid, "title": u["title"], "type": u["type"], "status": "active",
-                  "characters": u.get("characters", []), "planted_at": n, "last_touched": n,
-                  "promise": u["promise"], "payoff": None, "payoff_window": u.get("payoff_window"),
-                  "milestones": [{"chapter": n, "action": "plant", "note": u.get("note", "")}]}
-            threads.append(th)
-            by_id[tid] = th
-            u["id"] = tid
-        else:
-            th = by_id[u["id"]]
-            th["last_touched"] = n
-            th.setdefault("milestones", []).append({"chapter": n, "action": u["action"], "note": u.get("note", "")})
-            if u["action"] == "resolve":
-                th["status"] = "resolved"
-                th["payoff"] = u.get("note", "")
-                th["resolved_at"] = n
-            elif u["action"] == "abandon":
-                th["status"] = "abandoned"
-            elif th["status"] in ("planned", "dormant"):
-                th["status"] = "active"
-    write_json(P["threads"], threads)
-    # summary
-    write_json(ch_path("sum_ch", n, "json"), {"chapter": n, "title": facts["title"], "summary": facts["summary"],
-                                             "key_events": facts.get("key_events", []), "characters": sorted(present),
-                                             "pov": facts.get("pov"), "day_start": t["day_start"], "day_end": t["day_end"],
-                                             "word_count": wc(final), "hook_type": facts.get("hook_type"),
-                                             "dominant_thread": facts.get("dominant_thread")})
-    # index
-    index_chapter(db(), n, final, facts)
-    # facts sha + progress
+        if u.get("action") == "plant" and not u.get("id"):
+            k = len(used) + 1
+            while f"T{k:02d}" in used:
+                k += 1
+            u["id"] = f"T{k:02d}"
+            used.add(u["id"])
     facts["committed_sha"] = digest
     facts["committed_at"] = now()
     write_json(ch_path("facts", n, "json"), facts)
+    _PROJECTIONS.clear()
+    write_ledger(project())
+    index_chapter(db(), n, final, facts)
     p["last_committed"] = max(p["last_committed"], n)
     p["next_chapter"] = max(p["next_chapter"], n + 1)
     p["phase"] = "writing"
@@ -1327,15 +1387,13 @@ def next_round(n: int) -> None:
     if review is None or not ck.exists():
         fail(f"第 {n} 章本轮的 review 与 check 不齐，没有可归档的评审")
     rnd = review_round(n)
-    if effective_verdict(review) == "accept" or rnd >= 2:
+    if effective_verdict(review, read_json(ck, None)) == "accept" or rnd >= 2:
         fail(f"第 {n} 章第 {rnd} 轮评审不需要再修订（见 status 的 route）")
-    lint = lint_text(read_text(ch_path("drafts", n, "md")), n)
-    if lint["issues"]:
-        print("\n".join("- " + i for i in lint["issues"]))
-        fail("修订稿 lint 未通过，先让写手修到 issues 为空", 2)
+    # 被评审的稿子另存一份：路由据此判断写手改没改，judge 也能盲比修订前后
+    _copy_file(ch_path("drafts", n, "md"), P["reviews"] / f"{ch_name(n)}.r{rnd}.draft.md")
     rv.rename(P["reviews"] / f"{ch_name(n)}.r{rnd}.json")
     ck.rename(P["reviews"] / f"{ch_name(n)}.r{rnd}.check.json")
-    checkpoint(n, "next-round", f"第 {rnd} 轮评审归档，进入第 {rnd + 1} 轮")
+    checkpoint(n, "next-round", f"第 {rnd} 轮评审归档，交写手修订")
     print(json.dumps({"archived_round": rnd, "round": rnd + 1, "route": route(load_progress())}, ensure_ascii=False))
 
 
@@ -1359,7 +1417,7 @@ def sync_check() -> list[dict]:
         if not facts or not facts.get("committed_sha"):
             continue
         if sha(read_text(f)) != facts["committed_sha"]:
-            out.append({"chapter": n, "reason": "正文已被手动修改，事实需重新抽取（删除 facts 的 committed_sha 后重跑 ledger + commit --force）"})
+            out.append({"chapter": n, "reason": "正文已被手动修改，需重跑 ledger 抽取事实后 commit --force"})
     return out
 
 
@@ -1637,7 +1695,7 @@ def _detect_runtimes() -> list[str]:
 def init_project(standalone: bool = False, runtimes: str | None = None) -> None:
     if ROOT.resolve() == HARNESS_ROOT.resolve() and (HARNESS_ROOT / TEMPLATE_DIR).is_dir():
         fail("这是 harness 本身的目录，不能当作小说工作区。到一个空目录（或你的小说目录）里运行 init。")
-    for k in ("char_dir", "world_dir", "plans", "drafts", "final", "facts", "reviews", "sum_ch", "sum_arc", "sum_vol", "char_state_dir"):
+    for k in ("char_dir", "world_dir", "plans", "drafts", "final", "facts", "reviews", "sum_arc", "sum_vol", "char_state_dir"):
         P[k].mkdir(parents=True, exist_ok=True)
     P["style_rules"].parent.mkdir(parents=True, exist_ok=True)
     fresh = not P["progress"].exists()
@@ -1801,7 +1859,7 @@ def steer_comment(cid: str) -> dict:
 
 
 # ---------------------------------------------------------------- studio（本地 Web 预览台）
-# 只开放给人看与改的目录。ledger/、state/、summaries/chapters/、index/ 只由 novel.py 写入，网页只读或不可见；
+# 只开放给人看与改的目录。ledger/、state/、index/ 只由 novel.py 写入，网页只读或不可见；
 # 评审与事实是角色产物，网页只读，返工走批注或干预。
 STUDIO_EDITABLE = ("bible/", "outline/", "threads/", "chapters/plans/", "chapters/drafts/", "chapters/final/")
 STUDIO_READABLE = STUDIO_EDITABLE + ("chapters/reviews/", "chapters/facts/", "summaries/", "ledger/", "state/progress.json")
@@ -1843,7 +1901,8 @@ def chapter_stage(n: int, p: dict) -> dict:
         stage = "plan"
     else:
         stage = "outline"
-    return {"stage": stage, "verdict": effective_verdict(review) if review else None,
+    check = read_json(P["reviews"] / f"{ch_name(n)}.check.json", None)
+    return {"stage": stage, "verdict": effective_verdict(review, check) if review else None,
             "round": review_round(n) if review else None}
 
 
@@ -2058,15 +2117,14 @@ def serve(host: str, port: int, open_browser: bool) -> None:
 def recall(entity: str, before: int | None) -> dict:
     names = entity_names()
     name = canon(entity, names)
-    lim = before or 10**9
-    st = load_char_state(name)
-    return {"name": name, "card": character_card(name)[:3000], "state": st,
-            "timeline": [e for e in read_jsonl(P["timeline"]) if name in e.get("characters", []) and e["chapter"] < lim][-30:],
-            "knowledge": [k for k in read_jsonl(P["knowledge"]) if k.get("who") == name and k["chapter"] < lim],
-            "state_changes": [c for c in read_jsonl(P["state_changes"]) if c.get("entity") == name and c["chapter"] < lim],
-            "relationships": {k: v for k, v in read_json(P["relationships"], {}).items() if name in (v.get("a"), v.get("b"))},
+    L = project(before - 1 if before else None)
+    return {"name": name, "card": character_card(name)[:3000], "state": char_state(name, L),
+            "timeline": [e for e in L["timeline"] if name in e.get("characters", [])][-30:],
+            "knowledge": [k for k in L["knowledge"] if k.get("who") == name],
+            "state_changes": [c for c in L["state_changes"] if c.get("entity") == name],
+            "relationships": {k: v for k, v in L["relationships"].items() if name in (v.get("a"), v.get("b"))},
             "scenes": search(name, before, 20)["scenes"],
-            "cast_entry": read_json(P["cast"], {}).get(name)}
+            "cast_entry": L["cast"].get(name)}
 
 
 # ---------------------------------------------------------------- cli
@@ -2099,8 +2157,6 @@ def main(argv: list[str]) -> None:
     s = sub.add_parser("threads", help="故事线台账")
     s.add_argument("--stale", action="store_true")
     s.add_argument("--id")
-    s = sub.add_parser("character", help="人物卡 + 状态投影")
-    s.add_argument("name")
     s = sub.add_parser("locate", help="章节在卷/弧中的位置与大纲条目")
     s.add_argument("chapter", type=int)
     s = sub.add_parser("validate-facts", help="校验 chapters/facts/chNNNN.json")
@@ -2114,7 +2170,7 @@ def main(argv: list[str]) -> None:
     s = sub.add_parser("commit", help="提交定稿：校验事实、更新账本、索引、进度")
     s.add_argument("chapter", type=int)
     s.add_argument("--force", action="store_true")
-    s = sub.add_parser("next-round", help="修订稿 lint 通过后归档本轮 review/check，进入下一轮评审")
+    s = sub.add_parser("next-round", help="评审要求修订时归档本轮 review/check 与被评审的稿子，交写手修订")
     s.add_argument("chapter", type=int)
     s = sub.add_parser("finalize", help="把草稿复制为定稿（评审通过后）")
     s.add_argument("chapter", type=int)
@@ -2147,6 +2203,7 @@ def main(argv: list[str]) -> None:
     s.add_argument("--open", action="store_true", help="启动后打开浏览器")
     sub.add_parser("sync", help="检测被手动修改过的定稿")
     sub.add_parser("reindex", help="重建全文索引")
+    sub.add_parser("rebuild", help="从已提交章节的 facts 重放出 ledger/（升级或手动改过 facts 后用）")
     a = ap.parse_args(argv)
 
     if a.cmd == "init":
@@ -2164,7 +2221,7 @@ def main(argv: list[str]) -> None:
     elif a.cmd == "recall":
         print(json.dumps(recall(a.entity, a.before), ensure_ascii=False, indent=1))
     elif a.cmd == "timeline":
-        rows = read_jsonl(P["timeline"])
+        rows = project()["timeline"]
         if a.d0 is not None:
             rows = [r for r in rows if (r.get("day") or 0) >= a.d0]
         if a.d1 is not None:
@@ -2183,8 +2240,6 @@ def main(argv: list[str]) -> None:
         if a.stale:
             tv = [t for t in tv if t["stale"] or t["payoff_overdue"]]
         print(json.dumps(tv, ensure_ascii=False, indent=1))
-    elif a.cmd == "character":
-        print(json.dumps(recall(a.name, None), ensure_ascii=False, indent=1))
     elif a.cmd == "locate":
         print(json.dumps(locate(a.chapter), ensure_ascii=False, indent=1))
     elif a.cmd == "validate-facts":
@@ -2285,6 +2340,11 @@ def main(argv: list[str]) -> None:
         print(json.dumps(sync_check(), ensure_ascii=False, indent=1))
     elif a.cmd == "reindex":
         reindex()
+    elif a.cmd == "rebuild":
+        L = project()
+        write_ledger(L)
+        print(f"rebuilt ledger from {len(committed_facts())} committed chapters: "
+              f"{len(L['timeline'])} timeline rows, {len(L['chars'])} entities, {len(L['threads'])} threads")
 
 
 if __name__ == "__main__":
