@@ -6,7 +6,9 @@
   2. 工作区内（含子目录）status 正常；插件目录自身不是工作区
   3. 钩子脚本放在插件目录里也能从被写文件反推工作区：Claude Code 与 Antigravity 两种载荷
   4. upgrade 刷新 vendored 文件并记录版本
-  5. --standalone 把角色与 skill 复制进 .claude/
+  5. --standalone 按运行时生成角色与 skill
+  6. 只装 skill 时从缓存初始化与升级
+  7. 0.1.0 工作区迁移：软链（断链 / 有效）、根目录角色副本、旧协议
 """
 from __future__ import annotations
 
@@ -166,6 +168,36 @@ def main() -> None:
         check(r.returncode == 0 and (ws5 / "docs/protocol.md").read_text(encoding="utf-8") != "stale" and ".claude/agents/writer.md" in r.stdout
               and ".codex/agents/writer.toml" in r.stdout,
               "工作区自身的 novel.py 能从缓存 upgrade 并按已有运行时目录重新生成角色")
+
+        # 7. 0.1.0 工作区：tools/ 软链到（已卸载的）插件目录、根目录带角色副本与旧协议
+        for ws6, live in ((tmp / "legacy-dangling", False), (tmp / "legacy-live", True)):
+            ws6.mkdir()
+            run(sys.executable, str(NOVEL), "init", cwd=ws6)
+            prog = json.loads((ws6 / "state/progress.json").read_text())
+            prog.pop("harness_version")
+            (ws6 / "state/progress.json").write_text(json.dumps(prog), encoding="utf-8")
+            old_plugin = tmp / f"old-plugin-{ws6.name}"
+            (old_plugin / "tools/hooks").mkdir(parents=True)
+            (old_plugin / "tools/novel.py").write_text("# old", encoding="utf-8")
+            for rel in ("tools/novel.py", "tools/hooks"):
+                shutil.rmtree(ws6 / rel) if (ws6 / rel).is_dir() else (ws6 / rel).unlink()
+                (ws6 / rel).symlink_to(old_plugin / rel)
+            if not live:
+                shutil.rmtree(old_plugin)
+            shutil.copytree(HARNESS / "agents", ws6 / "agents")
+            for name in ("CLAUDE.md", "AGENTS.md"):
+                (ws6 / name).unlink()
+                (ws6 / name).write_text("# novel-harness：长篇小说创作 Agent 团队\n\n旧协议", encoding="utf-8")
+            r = run(sys.executable, str(NOVEL), *(("upgrade",) if live else ("init", "--standalone", "--runtime", "antigravity")), cwd=ws6)
+            check(r.returncode == 0 and not (ws6 / "tools/novel.py").is_symlink() and (ws6 / "tools/hooks/post_write.sh").exists()
+                  and not (ws6 / "agents").exists(), f"0.1.0 工作区（{'软链有效，upgrade' if live else '断链，init'}）：拆软链、补齐工具、移除根目录角色副本")
+            check(all("<!-- novel-harness:begin -->" in (ws6 / n).read_text(encoding="utf-8") and "旧协议" not in (ws6 / n).read_text(encoding="utf-8")
+                      for n in ("CLAUDE.md", "AGENTS.md")), "0.1.0 工作区：旧协议副本换成工作区模板")
+            check(json.loads((ws6 / "state/progress.json").read_text()).get("harness_version") == ver, "0.1.0 工作区：记录 harness_version")
+            if live:
+                check((old_plugin / "tools/novel.py").read_text(encoding="utf-8") == "# old", "升级不会顺着软链改写插件目录")
+            else:
+                check((ws6 / ".agents/agents/writer.md").exists(), "0.1.0 工作区 init --standalone 生成 Antigravity 角色")
         print("ALL OK")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

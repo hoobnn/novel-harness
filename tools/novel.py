@@ -1262,8 +1262,22 @@ def sync_check() -> list[dict]:
 
 
 # ---------------------------------------------------------------- init / upgrade / status
+def _symlinks_on_path(dst: Path) -> list[Path]:
+    """dst 在工作区内的路径上有哪些软链（0.1.0 工作区把 tools/ 等软链到插件目录）。"""
+    if not dst.is_relative_to(ROOT):
+        return []
+    found, cur = [], ROOT
+    for part in dst.relative_to(ROOT).parts:
+        cur = cur / part
+        if cur.is_symlink():
+            found.append(cur)
+    return found
+
+
 def _copy_file(src: Path, dst: Path) -> None:
     import shutil
+    for link in _symlinks_on_path(dst):   # 先拆软链：既修断链，也免得顺着链接改写插件源码
+        link.unlink()
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
 
@@ -1275,7 +1289,7 @@ def _vendor(src_root: Path, overwrite: bool) -> list[str]:
         src, dst = src_root / rel, ROOT / rel
         if not src.exists():
             continue
-        if overwrite or not dst.exists():
+        if overwrite or not dst.exists() or _symlinks_on_path(dst):
             _copy_file(src, dst)
             done.append(rel)
     return done
@@ -1294,7 +1308,7 @@ def _seed_templates(src_root: Path) -> list[str]:
         dst = ROOT / rel
         if rel.name == "CLAUDE.md":
             block = f.read_text(encoding="utf-8")
-            marker = "<!-- novel-harness:begin -->"
+            marker = WORKSPACE_MARKER_BEGIN
             if not dst.exists():
                 dst.write_text(block, encoding="utf-8")
                 done.append(str(rel))
@@ -1306,6 +1320,52 @@ def _seed_templates(src_root: Path) -> list[str]:
         if not dst.exists():
             _copy_file(f, dst)
             done.append(str(rel))
+    return done
+
+
+LEGACY_HEADING = "# novel-harness：长篇小说创作 Agent 团队"   # 0.1.0 整仓即工作区时根目录协议副本的标题
+WORKSPACE_MARKER_BEGIN = "<!-- novel-harness:begin -->"
+
+
+def _is_legacy_copy(d: Path, names: set[str]) -> bool:
+    """d 是 0.1.0 带进工作区的 agents/ 或 skills/：只含 harness 自带的同名条目。"""
+    if not d.is_dir() or d.is_symlink():
+        return False
+    entries = [e.name for e in d.iterdir() if e.name != ".DS_Store"]
+    return bool(entries) and set(entries) <= names
+
+
+def _migrate_legacy(src_root: Path) -> list[str]:
+    """0.1.0 工作区（整仓复制或软链到插件目录）迁到当前布局。被删的都是 harness 自带文件，工作区 git 里有原样。"""
+    import shutil
+    done = []
+    for d, names in ((ROOT / "agents", {f.name for f in (src_root / "agents").glob("*.md")}),
+                     (ROOT / "skills", {f.name for f in (src_root / "skills").iterdir() if f.is_dir()})):
+        if d.is_symlink():
+            d.unlink()
+        elif _is_legacy_copy(d, names):
+            shutil.rmtree(d)
+        else:
+            continue
+        done.append(f"{d.name}/ 已移除（0.1.0 的角色/skill 副本，改由插件或 standalone 生成）")
+    stale = []
+    for name in ("CLAUDE.md", "AGENTS.md", "GEMINI.md"):
+        f = ROOT / name
+        if f.is_symlink() and not f.exists():
+            f.unlink()
+            stale.append(name)
+        elif f.is_file() and not f.is_symlink():
+            text = f.read_text(encoding="utf-8")
+            if text.startswith(LEGACY_HEADING) and WORKSPACE_MARKER_BEGIN not in text:
+                f.unlink()
+                stale.append(name)
+    if stale:
+        tpl = src_root / TEMPLATE_DIR / "CLAUDE.md"
+        if "CLAUDE.md" in stale and tpl.exists():
+            _copy_file(tpl, ROOT / "CLAUDE.md")
+        if (ROOT / "CLAUDE.md").exists():
+            _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")
+        done.append(f"{' / '.join(stale)} 换成工作区模板（原为 0.1.0 协议副本）")
     return done
 
 
@@ -1481,6 +1541,7 @@ def init_project(standalone: bool = False, runtimes: str | None = None) -> None:
     fresh = not P["progress"].exists()
     if fresh:
         save_progress(default_progress())
+    legacy = "harness_version" not in load_progress()   # 0.1.0 工作区没记过版本：按升级处理
     if not P["style_rules"].exists():
         write_json(P["style_rules"], DEFAULT_STYLE_RULES)
     if not P["threads"].exists():
@@ -1491,8 +1552,13 @@ def init_project(standalone: bool = False, runtimes: str | None = None) -> None:
         write_json(P["cast"], {})
     db().close()
 
-    written = _seed_templates(HARNESS_ROOT)
-    written += _vendor(HARNESS_ROOT, overwrite=False)
+    written = _migrate_legacy(HARNESS_ROOT) if legacy else []
+    written += _seed_templates(HARNESS_ROOT)
+    written += _vendor(HARNESS_ROOT, overwrite=legacy)
+    if legacy:
+        p = load_progress()
+        p["harness_version"] = __version__
+        save_progress(p)
     if (ROOT / "CLAUDE.md").exists():
         _link_or_copy("CLAUDE.md", ROOT / "AGENTS.md")   # Codex / OpenCode / Antigravity / Pi / Cursor 都读 AGENTS.md
     chosen: list[str] = []
@@ -1571,7 +1637,8 @@ def upgrade_workspace(src: str | None) -> None:
     new_ver = src_ver.group(1) if src_ver else "unknown"
     p = load_progress()
     old_ver = p.get("harness_version", "unknown")
-    done = _vendor(src_root, overwrite=True)
+    done = _migrate_legacy(src_root)
+    done += _vendor(src_root, overwrite=True)
     done += _refresh_standalone_components(src_root)
     p["harness_version"] = new_ver
     save_progress(p)

@@ -85,6 +85,8 @@ novel-harness (this repo, install once)  my-novel/ (one folder per novel, create
 Each workspace carries its own copy of `tools/novel.py` and the data contract, matching its data format.
 Updating the plugin won't change how an existing novel behaves; run
 `python3 <plugin dir>/tools/novel.py upgrade` inside the workspace when you want the new version.
+A 0.1.0 workspace (`tools/` symlinked into the plugin, a root `agents/` copy, the old protocol) migrates the same way
+through `upgrade` or `init`: symlinks become real files, the role copies go, and `CLAUDE.md` / `AGENTS.md` become the workspace template.
 
 ## Install
 

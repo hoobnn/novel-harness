@@ -14,5 +14,5 @@
 - `bible/` 是权威设定，写作期只有 architect（经用户授权）可以修改；发现设定冲突先记到 facts 的 `outline_feedback`，不要顺手改设定。
 - 不把整本书塞进任何一个上下文；需要前文时用 `novel.py context / search / recall / timeline`。
 
-入口（Claude Code 插件模式）：`/novel-harness:novel-init` `/novel-harness:novel-next` `/novel-harness:novel-status` `/novel-harness:novel-steer` `/novel-harness:novel-sync` `/novel-harness:novel-arc-review`。standalone 模式（角色与 skill 复制在本目录 `.claude/` 下）去掉 `novel-harness:` 前缀。
+入口（Claude Code 插件模式）：`/novel-harness:novel-init` `/novel-harness:novel-next` `/novel-harness:novel-status` `/novel-harness:novel-steer` `/novel-harness:novel-sync` `/novel-harness:novel-arc-review`。standalone 模式（角色与 skill 按运行时生成在本目录 `.claude/`、`.agents/` 等处）去掉 `novel-harness:` 前缀，如 `/novel-next`。
 <!-- novel-harness:end -->

@@ -78,6 +78,8 @@ novel-harness（本仓库，装一次）          my-novel/（每部小说一个
 
 每个工作区自带一份 `tools/novel.py` 和数据契约，版本和它的数据格式对应。插件升级不会改变已有小说的行为，
 想升级时在工作区里运行 `python3 <插件目录>/tools/novel.py upgrade`。
+0.1.0 的工作区（`tools/` 软链到插件目录、根目录带 `agents/` 和旧协议）也走 `upgrade` 或 `init`：
+软链换成实体文件，角色副本移除，`CLAUDE.md` / `AGENTS.md` 换成工作区模板。
 
 ## 安装
 
