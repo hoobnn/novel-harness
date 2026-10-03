@@ -480,7 +480,10 @@ def review_round(n: int) -> int:
     一起改名为 chNNNN.rK.json / chNNNN.rK.check.json，路由数归档文件即可，
     不依赖任何角色记得写对 round 字段。
     """
-    return 1 + sum(1 for f in P["reviews"].glob(f"{ch_name(n)}.r*.json") if re.search(r"\.r\d+\.json$", f.name))
+    archived = 1 + sum(1 for f in P["reviews"].glob(f"{ch_name(n)}.r*.json") if re.search(r"\.r\d+\.json$", f.name))
+    review = read_json(ch_path("reviews", n, "json"), None) or {}
+    # 旧工作区靠删文件推进、没有归档时，取 editor 自报值兜底，避免升级后在途章节多跑一轮
+    return max(archived, review["round"]) if isinstance(review.get("round"), int) else archived
 
 
 def route(p: dict) -> dict:
@@ -536,8 +539,6 @@ def route(p: dict) -> dict:
         return {"action": "checker+editor", "chapter": n, "round": rnd,
                 "reason": "草稿待检查与评审" if rnd == 1 else f"修订稿待第 {rnd} 轮检查与评审",
                 "missing": missing_side}
-    if isinstance(review.get("round"), int):  # 旧工作区靠删文件推进时没有归档，取自报值兜底
-        rnd = max(rnd, review["round"])
     verdict = effective_verdict(review)
     if verdict == "rewrite" and rnd >= 2:
         return {"action": "blocked", "chapter": n, "round": rnd,

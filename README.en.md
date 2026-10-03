@@ -62,7 +62,7 @@ flowchart LR
     W --> C[checker<br/>continuity]
     W --> E[editor<br/>7-point review]
     C --> E
-    E -->|rewrite / polish ≤ 2 rounds| W
+    E -->|rewrite / polish, ≤ 2 review rounds| W
     E -->|pass| F[finalize]
     F --> L[ledger<br/>extract facts]
     L --> K[novel.py commit<br/>validate · ledger · index]
@@ -180,7 +180,7 @@ architect, planner, writer, editor and judge use the main session's model; ledge
 and checking on a cheaper model. Change it in the `model` field of `agents/*.md`.
 
 ```
-planner → writer → (checker ∥ editor) → revise ≤ 2 rounds → finalize → ledger → commit
+planner → writer → (checker ∥ editor) → ≤ 2 review rounds → finalize → ledger → commit
 ```
 
 - End of an arc: the editor reviews the arc and writes an arc summary, character snapshots and style rules; the architect then expands the next arc.
@@ -202,6 +202,7 @@ python3 tools/novel.py timeline --entity 林越     # timeline for an entity
 python3 tools/novel.py threads --stale           # stalled and overdue threads
 python3 tools/novel.py check 12                  # continuity check
 python3 tools/novel.py lint 12                   # mechanical style check
+python3 tools/novel.py next-round 12             # move to the next review round once the revision lints clean
 python3 tools/novel.py stylestat                 # style stats for the whole book
 python3 tools/novel.py commit 12                 # commit a final chapter and update ledgers
 python3 <plugin dir>/tools/novel.py upgrade      # refresh the workspace's novel.py / hooks / contract

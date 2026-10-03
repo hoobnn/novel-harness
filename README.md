@@ -56,7 +56,7 @@ flowchart LR
     W --> C[checker<br/>连续性]
     W --> E[editor<br/>七维评审]
     C --> E
-    E -->|rewrite / polish ≤ 2 轮| W
+    E -->|rewrite / polish，评审 ≤ 2 轮| W
     E -->|pass| F[finalize]
     F --> L[ledger<br/>抽取事实]
     L --> K[novel.py commit<br/>校验 · 账本 · 索引]
@@ -170,7 +170,7 @@ architect、planner、writer、editor、judge 用主会话模型；ledger 和 ch
 可以在 `agents/*.md` 的 `model` 字段里改。
 
 ```
-planner → writer → (checker ∥ editor) → 修订 ≤ 2 轮 → finalize → ledger → commit
+planner → writer → (checker ∥ editor) → 评审 ≤ 2 轮 → finalize → ledger → commit
 ```
 
 - 弧末：editor 做弧级评审，写弧摘要、角色快照和风格规则，然后 architect 展开下一弧。
@@ -192,6 +192,7 @@ python3 tools/novel.py timeline --entity 林越     # 时间线查询
 python3 tools/novel.py threads --stale           # 停滞与超期的故事线
 python3 tools/novel.py check 12                  # 连续性检查
 python3 tools/novel.py lint 12                   # 文体机械检查
+python3 tools/novel.py next-round 12             # 修订稿通过 lint 后进入下一轮评审
 python3 tools/novel.py stylestat                 # 全书文体统计
 python3 tools/novel.py commit 12                 # 提交定稿并更新账本
 python3 <插件目录>/tools/novel.py upgrade        # 刷新工作区的 novel.py / 钩子 / 契约
