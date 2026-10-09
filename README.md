@@ -7,18 +7,18 @@
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green.svg)](tools/novel.py)
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8.svg)](#claude-code-插件)
 
-一套在 Claude Code 里写长篇小说的工具：七个子智能体分别负责规划、写作、核对、评审和记账，
-再加一个纯 Python 的事实层，记录时间线、故事线、人物知道什么和文风统计。
-目标是一百章以上的中文长篇，题材不限。Cursor、Codex、OpenCode、Antigravity、Pi 也能用。
+一套在 Claude Code 里写长篇小说的工具：七个子智能体分别负责规划、写作、核对、评审和事实抽取，
+另有一个纯 Python 实现的事实层，记录时间线、故事线、每个人物已知的信息和文风统计。
+面向一百章以上的中文长篇，题材不限。除 Claude Code 外，也支持 Cursor、Codex、OpenCode、Antigravity 和 Pi。
 
 ## 为什么做这个
 
-用大模型写短篇问题不大，写到第 80 章就开始乱：第 12 章那把匕首给了谁、老周知不知道主角的身份、
-三卷前埋的伏笔收没收，模型都记不住。人设走样、时间线打架、伏笔烂尾，根子上是把连续性交给了模型的上下文。
+用大模型写短篇问题不大，写到第 80 章前后就容易出错：第 12 章那把匕首给了谁、老周知不知道主角的身份、
+三卷前埋的伏笔有没有回收，模型都记不住。人设走样、时间线冲突、伏笔落空，根本原因是连续性只依赖模型的上下文。
 
-所以这里的做法是记账。每章定稿后，账本员把结构化事实抽出来（谁在哪、故事里第几天、谁知道了什么、哪条线往前走了），
-写进只允许代码改的账本。下一章开写前，工具按需把相关前情、人物状态、待收的伏笔检索出来交给写手。
-前后矛盾由代码报错。
+因此本项目把连续性交给结构化的事实记录。每章定稿后，ledger 角色从正文中抽取事实（谁在哪、故事里第几天、谁知道了什么、哪条故事线有推进），
+写入只能由代码修改的事实库（即 `ledger/` 目录，下文简称「账本」）。下一章开写前，工具按需检索相关前情、人物状态和待回收的伏笔，交给 writer。
+前后矛盾由代码直接报错。
 
 ## 功能
 
@@ -29,13 +29,13 @@
   - SQLite FTS5 场景级全文检索，用 CJK bigram 分词，「老周」这种两字人名也搜得到
   - 按「故事内第几天」计数的时间线校验
   - 故事线台账，每条线记录承诺和兑现窗口
-  - 人物知识账本：每个人物此刻知道什么
+  - 人物知识记录：每个人物在当前章节知道哪些信息
   - 疲劳词和套句的文体统计
-- 人工闸门有三档：每弧停、每章停、全自动。设定生成后一定会停下来等你看。
-- 写作途中随时插话：改文风、改走向、返工某一章、写到第 N 章为止。
-- 草稿落盘后自动 lint，事实文件落盘后自动校验，问题直接交回模型修。
+- 人工闸门有三档：每弧停、每章停、全自动。生成基础设定后总会暂停，等你确认。
+- 写作过程中可以随时插入调整：改文风、改走向、返工某一章、写到第 N 章为止。
+- 草稿落盘后自动 lint，事实文件落盘后自动校验，发现问题直接交回模型修改。
 - 一份角色定义，按运行时生成 Claude Code、Cursor、Codex、OpenCode、Antigravity、Pi 各自的子智能体文件。
-- 账本是 JSON / JSONL，正文是 Markdown，整个工作区就是一个 git 仓库，随时可以翻旧账。
+- 事实记录是 JSON / JSONL，正文是 Markdown，整个工作区就是一个 git 仓库，所有改动都可以对比和回滚。
 
 ## 架构
 
@@ -44,7 +44,7 @@
 | | 事实层 | 语义层 |
 |---|---|---|
 | 谁负责 | `tools/novel.py`（标准库，单文件） | `agents/` 下的七个角色 |
-| 做什么 | 进度路由、时间先后、故事线到期、知识账本、文体统计、事实校验 | 规划、写作、核对、评审、抽取 |
+| 做什么 | 进度路由、时间先后、故事线到期、人物知识记录、文体统计、事实校验 | 规划、写作、核对、评审、抽取 |
 | 结果 | 代码判定，结果唯一 | 靠判断，允许有分歧 |
 
 主会话只负责调度：读事实，查路由，派子智能体，校验产物，推进状态。它不写正文，不做文学判断，也不手改账本。
@@ -167,7 +167,7 @@ Agent 写入的产物几秒内就会出现。设定、大纲、计划、草稿�
 | writer 写手 | 章节计划 + 上下文包 | `chapters/drafts/chNNNN.md` |
 | checker 连续性检查 | 草稿 + 账本 | `chapters/reviews/chNNNN.check.json` |
 | editor 编辑 | 草稿 + 检查结论 | `chapters/reviews/chNNNN.json`、弧 / 卷摘要 |
-| ledger 账本员 | 定稿 | `chapters/facts/chNNNN.json` |
+| ledger 事实抽取 | 定稿 | `chapters/facts/chNNNN.json` |
 | judge 盲比评审 | 同一章的两个版本 | 盲比结论 |
 
 architect、planner、writer、editor、judge 用主会话模型；ledger 和 checker 做抽取与核对，用便宜一些的模型，
@@ -191,7 +191,7 @@ planner → writer → (checker ∥ editor) → 评审 ≤ 2 轮 → finalize �
 python3 tools/novel.py status                    # 进度 + 下一步路由
 python3 tools/novel.py context 12 --for writer   # 装配第 12 章上下文包
 python3 tools/novel.py search "铁匠铺" --before 12 # 场景级全文检索
-python3 tools/novel.py recall --entity 老周       # 召回某实体的全部账本
+python3 tools/novel.py recall --entity 老周       # 召回某实体的全部事实记录
 python3 tools/novel.py timeline --entity 林越     # 时间线查询
 python3 tools/novel.py threads --stale           # 停滞与超期的故事线
 python3 tools/novel.py check 12                  # 连续性检查
@@ -218,7 +218,7 @@ python3 <插件目录>/tools/novel.py upgrade        # 刷新工作区的 novel.
 用 `/novel-harness:novel-steer`。偏好类的会加进用户规则；走向类的由 architect 增量改大纲；
 返工类的由 editor 圈出需要改的最少章节，逐章修订并重新抽取事实。
 
-**手改了正文，账本会不会过期？**
+**手改了正文，事实记录会不会过期？**
 跑一次 `/novel-harness:novel-sync`，它会找出改动过的定稿，重新抽取事实并重建索引。
 
 **必须用 Claude 吗？**
@@ -230,7 +230,7 @@ python3 <插件目录>/tools/novel.py upgrade        # 刷新工作区的 novel.
 ## 致谢
 
 思路参考了 [voocel/ainovel-cli](https://github.com/voocel/ainovel-cli)。在它的基础上我加了场景级全文检索、
-按故事内天数校验的时间线、带兑现窗口的故事线台账、人物知识账本、独立的 checker / ledger 角色和 judge 盲比，
+按故事内天数校验的时间线、带兑现窗口的故事线台账、人物知识记录、独立的 checker / ledger 角色和 judge 盲比，
 并改成了可以通过插件市场和 `npx skills` 分发的形式。
 
 ## 开发

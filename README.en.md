@@ -8,7 +8,7 @@
 [![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8.svg)](#claude-code-plugin)
 
 A toolkit for writing novels of 100+ chapters with coding agents. Seven sub-agents split the work
-(planning, drafting, checking, editing, bookkeeping), and a small Python fact layer keeps track of the
+(planning, drafting, checking, editing, fact extraction), and a small Python fact layer keeps track of the
 timeline, plot threads, what each character knows, and style statistics.
 It's built for Chinese web fiction first, but the genre is up to you.
 It ships as a Claude Code plugin and also runs in Cursor, Codex, OpenCode, Antigravity and Pi.
@@ -19,9 +19,9 @@ Short stories are fine with an LLM. Around chapter 80 things fall apart: who got
 whether Lao Zhou knows the protagonist's real identity, whether a foreshadowed plot point ever paid off.
 The model has long forgotten. The root cause is leaving continuity to the model's context window.
 
-So this project keeps books. After each chapter is final, a ledger agent extracts structured facts
+So continuity lives in structured records instead. After each chapter is final, the ledger agent extracts facts
 (who is where, which in-story day it is, who learned what, which thread moved), and only code may write
-them to the ledger. Before the next chapter, the tool pulls the relevant backstory, character state and
+them to the fact store (the `ledger/` directory, called "the ledger" below). Before the next chapter, the tool pulls the relevant backstory, character state and
 open threads into a context pack for the writer. Contradictions show up as errors from code.
 
 ## What's in it
@@ -34,13 +34,13 @@ open threads into a context pack for the writer. Contradictions show up as error
   - scene-level full-text search with SQLite FTS5 and CJK bigram tokens, so two-character names still match
   - timeline checks counted in in-story days
   - a plot-thread registry with a promise and a payoff window per thread
-  - a per-character knowledge ledger
+  - a per-character knowledge record: what each character knows at this point in the story
   - style stats for overused words and stock phrases
 - Three review gates: stop per arc, per chapter, or run on its own. It always stops after generating the setting.
 - You can step in at any time: change the voice, change direction, redo a chapter, stop at chapter N.
 - Drafts are linted as soon as they're written and fact files are validated on write; problems go straight back to the model.
 - One set of role definitions, generated into the native sub-agent format of each runtime.
-- Ledgers are JSON / JSONL and chapters are Markdown, so the whole workspace is a git repo you can diff and roll back.
+- Fact records are JSON / JSONL and chapters are Markdown, so the whole workspace is a git repo you can diff and roll back.
 
 ## Architecture
 
