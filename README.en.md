@@ -77,7 +77,7 @@ flowchart LR
 
 ### Plugin and workspace
 
-```
+```text
 novel-harness (this repo, install once)  my-novel/ (one folder per novel, created by init)
 ├── agents/      seven roles            ├── CLAUDE.md        entry point to docs/protocol.md
 ├── skills/      seven /novel-* skills   ├── docs/protocol.md orchestration ┐ copied per version,
@@ -107,7 +107,7 @@ Python 3.10+, standard library only. Nothing to `pip install`.
 
 The repo is its own marketplace:
 
-```
+```text
 /plugin marketplace add hoobnn/novel-harness
 /plugin install novel-harness@novel-harness
 ```
@@ -150,7 +150,7 @@ Roles and skills are generated into that folder, and slash commands drop the `no
 
 Open Claude Code in an empty folder (your novel):
 
-```
+```text
 /novel-harness:novel-init An Eastern fantasy epic, the hero starts in a frontier town, aim for 200 chapters
 ```
 
@@ -158,7 +158,7 @@ It sets up the workspace and has the architect write the foundation: premise, wo
 character sheets, plot threads, the first arc's outline and a style guide. Then it stops so you can read
 `bible/`, `outline/` and `threads/`. Edit until you're happy, then continue:
 
-```
+```text
 /novel-harness:novel-next                      # advance until the next gate (per arc by default)
 /novel-harness:novel-next 20                   # keep going to chapter 20
 /novel-harness:novel-status                    # progress, thread health, style stats
@@ -190,7 +190,7 @@ Make the workspace a git repo. The main session runs `git commit` after each cha
 architect, planner, writer, editor and judge use the main session's model; ledger and checker do extraction
 and checking on a cheaper model. Change it in the `model` field of `agents/*.md`.
 
-```
+```text
 planner → writer → (checker ∥ editor) → ≤ 2 review rounds → finalize → ledger → commit
 ```
 

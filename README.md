@@ -71,7 +71,7 @@ flowchart LR
 
 ### 插件和工作区
 
-```
+```text
 novel-harness（本仓库，装一次）          my-novel/（每部小说一个目录，init 生成）
 ├── agents/      七个角色               ├── CLAUDE.md        指向 docs/protocol.md 的入口
 ├── skills/      七个 /novel-* 入口     ├── docs/protocol.md 调度协议   ┐ 随版本复制
@@ -99,7 +99,7 @@ novel-harness（本仓库，装一次）          my-novel/（每部小说一个
 
 仓库自带插件市场：
 
-```
+```text
 /plugin marketplace add hoobnn/novel-harness
 /plugin install novel-harness@novel-harness
 ```
@@ -140,14 +140,14 @@ npx skills add hoobnn/novel-harness
 
 在一个空目录（你的小说目录）里打开 Claude Code：
 
-```
+```text
 /novel-harness:novel-init 写一部东方玄幻长篇，主角从边陲小城起步，目标 200 章
 ```
 
 它会建好工作区，让架构师生成基础设定：前提、世界规则、日历、人物卡、故事线、第一弧大纲、文风标准。
 然后停下来，等你看 `bible/` `outline/` `threads/`。改到满意再往下写：
 
-```
+```text
 /novel-harness:novel-next                      # 按闸门推进（默认每弧停一次）
 /novel-harness:novel-next 20                   # 一直写到第 20 章
 /novel-harness:novel-status                    # 进度、故事线状态、文体统计
@@ -179,7 +179,7 @@ Agent 写入的产物几秒内就会出现。设定、大纲、计划、草稿�
 architect、planner、writer、editor、judge 用主会话模型；ledger 和 checker 做抽取与核对，用便宜一些的模型，
 可以在 `agents/*.md` 的 `model` 字段里改。
 
-```
+```text
 planner → writer → (checker ∥ editor) → 评审 ≤ 2 轮 → finalize → ledger → commit
 ```
 
