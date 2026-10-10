@@ -1,11 +1,15 @@
+<div align="center">
+
 # novel-harness: write long-form fiction with AI agents
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
+[![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8?style=flat-square)](#claude-code-plugin)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 [简体中文](README.md) · **English**
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green.svg)](tools/novel.py)
-[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8.svg)](#claude-code-plugin)
+</div>
 
 A toolkit for writing novels of 100+ chapters with coding agents. Seven sub-agents split the work
 (planning, drafting, checking, editing, fact extraction), and a small Python fact layer keeps track of the

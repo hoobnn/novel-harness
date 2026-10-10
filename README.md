@@ -1,11 +1,15 @@
+<div align="center">
+
 # novel-harness：用 AI Agent 写长篇小说
+
+[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
+[![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8?style=flat-square)](#claude-code-插件)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)](LICENSE)
 
 **简体中文** · [English](README.en.md)
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
-[![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green.svg)](tools/novel.py)
-[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-5A3FD8.svg)](#claude-code-插件)
+</div>
 
 一套在 Claude Code 里写长篇小说的工具：七个子智能体分别负责规划、写作、核对、评审和事实抽取，
 另有一个纯 Python 实现的事实层，记录时间线、故事线、每个人物已知的信息和文风统计。
