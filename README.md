@@ -246,6 +246,6 @@ claude plugin validate .claude-plugin/plugin.json # 插件清单（根目录 CLA
 贡献者指南见 [`CLAUDE.md`](CLAUDE.md)，数据契约见 [`docs/schemas.md`](docs/schemas.md)，
 运行时适配见 [`docs/runtimes.md`](docs/runtimes.md)。欢迎提 issue 和 PR。
 
-## 许可
+## 许可证
 
-[MIT](LICENSE) © hoobnn
+[MIT](LICENSE) © 2026 hoobnn。可自由使用、修改和分发，需保留版权声明。

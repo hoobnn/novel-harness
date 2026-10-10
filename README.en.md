@@ -260,4 +260,4 @@ Runtime notes: [`docs/runtimes.md`](docs/runtimes.md). Issues and PRs welcome.
 
 ## License
 
-[MIT](LICENSE) © hoobnn
+[MIT](LICENSE) © 2026 hoobnn. Free to use, modify and distribute, provided the copyright notice is kept.
