@@ -1,6 +1,8 @@
 <div align="center">
 
-# novel-harness：用 AI Agent 写长篇小说
+# novel-harness
+
+用 AI Agent 写长篇小说。
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)

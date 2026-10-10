@@ -1,6 +1,8 @@
 <div align="center">
 
-# novel-harness: write long-form fiction with AI agents
+# novel-harness
+
+Write long-form fiction with AI agents.
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)
