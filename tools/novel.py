@@ -23,7 +23,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 WORKSPACE_MARKER = "state/progress.json"      # 有它才算小说工作区
 HARNESS_ROOT = Path(__file__).resolve().parent.parent   # 本文件所在的 harness（插件目录或工作区）
 VENDORED = [                                   # 随 harness 版本走、init 复制进工作区、upgrade 刷新
