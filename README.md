@@ -2,7 +2,7 @@
 
 # novel-harness
 
-用 AI Agent 写长篇小说。
+用 AI Agent 写长篇小说：Claude Code 插件与多智能体写作框架。
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)
@@ -13,9 +13,9 @@
 
 </div>
 
-一套在 Claude Code 里写长篇小说的工具：七个子智能体分别负责规划、写作、核对、评审和事实抽取，
-另有一个纯 Python 实现的事实层，记录时间线、故事线、每个人物已知的信息和文风统计。
-面向一百章以上的中文长篇，题材不限。除 Claude Code 外，也支持 Cursor、Codex、OpenCode、Antigravity 和 Pi。
+**novel-harness** 是一个免费开源（MIT）的 AI 长篇小说写作框架，以 Claude Code 插件的形式提供：七个子智能体分别负责规划、写作、核对、评审和事实抽取，
+另有一个纯 Python 标准库实现的事实层，记录时间线、故事线（伏笔）、每个人物已知的信息和文风统计，用来保证百章以上长篇的连续性。
+面向中文网文和长篇小说，题材不限。除 Claude Code 外，也可以通过 `npx skills` 用在 Cursor、Codex、OpenCode、Antigravity 和 Pi 上。
 
 ## 为什么做这个
 
@@ -232,6 +232,18 @@ python3 <插件目录>/tools/novel.py upgrade        # 刷新工作区的 novel.
 
 **写出来的小说归谁？**
 所有文件都在你自己的目录里。MIT 协议只约束这个工具本身，不管你写的内容。
+
+**怎么更新和卸载？**
+插件用户用 `claude plugin marketplace update novel-harness` 和 `claude plugin update novel-harness@novel-harness` 更新，卸载用 `claude plugin uninstall novel-harness@novel-harness`；`npx skills` 安装的用 `npx skills update -g -y` 更新。已有的小说工作区不会随之改变，要升级它的 `tools/novel.py`、钩子和数据契约，在工作区里运行 `python3 <插件目录>/tools/novel.py upgrade`。卸载工具不会动你的小说目录。
+
+**会把我的小说上传到哪里吗？**
+`tools/novel.py` 只用标准库，不访问外网，预览台只绑定本机。正文和设定只会像平时使用 Claude Code、Cursor 等工具一样，发给你所用的运行时和它配置的模型。
+
+**和直接让模型一章章写，或者其他 AI 写小说工具有什么区别？**
+区别在连续性：这里把时间线、故事线、人物知识记录成代码可校验的事实，下一章开写前按需检索，前后矛盾直接报错；这些记录都是普通 JSON / Markdown 文件，在你自己的目录和 git 里。如果只写短篇，直接对话生成就够了，用不上这套流程。思路参考了 [voocel/ainovel-cli](https://github.com/voocel/ainovel-cli)，需要独立命令行程序的可以看看它。
+
+**装好后命令找不到或者没反应？**
+先确认已新开会话，并且 Python 版本在 3.10 以上；Claude Code 插件的命令带前缀，如 `/novel-harness:novel-init`，`npx skills` 或 standalone 安装则不带前缀。
 
 ## 致谢
 

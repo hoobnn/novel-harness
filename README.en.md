@@ -2,7 +2,7 @@
 
 # novel-harness
 
-Write long-form fiction with AI agents.
+Write long-form fiction with AI agents: a Claude Code plugin and multi-agent novel-writing framework.
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?style=flat-square)](https://www.python.org/)
 [![Zero dependencies](https://img.shields.io/badge/deps-stdlib%20only-green?style=flat-square)](tools/novel.py)
@@ -13,11 +13,11 @@ Write long-form fiction with AI agents.
 
 </div>
 
-A toolkit for writing novels of 100+ chapters with coding agents. Seven sub-agents split the work
-(planning, drafting, checking, editing, fact extraction), and a small Python fact layer keeps track of the
-timeline, plot threads, what each character knows, and style statistics.
+**novel-harness** is a free, open-source (MIT) AI framework for writing novels of 100+ chapters, shipped as a Claude Code plugin. Seven sub-agents split the work
+(planning, drafting, checking, editing, fact extraction), and a fact layer in plain Python standard library keeps track of the
+timeline, plot threads (foreshadowing), what each character knows, and style statistics, so a long book stays consistent.
 It's built for Chinese web fiction first, but the genre is up to you.
-It ships as a Claude Code plugin and also runs in Cursor, Codex, OpenCode, Antigravity and Pi.
+Besides Claude Code, it runs in Cursor, Codex, OpenCode, Antigravity and Pi through `npx skills`.
 
 ## Why
 
@@ -243,6 +243,18 @@ No. The role prompts and the fact layer aren't tied to a model; any runtime in t
 
 **Who owns what I write?**
 You do. Everything lives in your own folder, and the MIT license covers this tool only.
+
+**How do I update and uninstall?**
+For the plugin, update with `claude plugin marketplace update novel-harness` and `claude plugin update novel-harness@novel-harness`, and uninstall with `claude plugin uninstall novel-harness@novel-harness`; for `npx skills`, update with `npx skills update -g -y`. Existing novel workspaces don't change by themselves: to refresh a workspace's `tools/novel.py`, hooks and data contracts, run `python3 <plugin dir>/tools/novel.py upgrade` inside it. Uninstalling the tool leaves your novel folder alone.
+
+**Is my novel uploaded anywhere?**
+`tools/novel.py` uses only the standard library and makes no network calls; the preview studio binds to localhost only. Your text goes only where it always goes when you use Claude Code, Cursor and the like: to the runtime and the model you configured.
+
+**How is this different from prompting a model chapter by chapter, or from other AI novel tools?**
+Continuity. Timeline, plot threads and what each character knows are recorded as facts that code can check and retrieve before the next chapter is written, so contradictions fail loudly; the records are plain JSON / Markdown in your own folder and git. For a short story, plain chat is enough and this pipeline is overkill. The idea started from [voocel/ainovel-cli](https://github.com/voocel/ainovel-cli); look at it if you want a standalone command-line program.
+
+**Commands not found or nothing happens?**
+Check that you started a new session and that Python is 3.10 or newer. Plugin commands carry a prefix, such as `/novel-harness:novel-init`; with `npx skills` or a standalone install there is no prefix.
 
 ## Credits
 
